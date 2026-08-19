@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.0
+// @version      2.2.1
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
 // @author       You + ChatGPT
 // @match        https://adviser-new.101internet.ru/orders/*
@@ -163,9 +163,22 @@
             return parts.join(', ');
         }
 
+       function providerFromLandLink() {
+            for (const link of document.querySelectorAll('a[href]')) {
+                const text = normalize(link.textContent);
+                const match = text.match(/^ленд\s*:\s*(.+)$/i);
+
+                if (match) {
+                    return clean(match[1], 'Не выбран');
+                }
+            }
+
+            return '';
+        }
+
         return {
             fio: field(['ФИО Клиента', 'ФИО']),
-            provider: field('Подключаемый провайдер', 'Не выбран'),
+            provider: providerFromLandLink() || field('Подключаемый провайдер', 'Не выбран'),
             providerOrderId: field('Номер заявки у провайдера', 'Не указан'),
             actualDate: field('Фактическая дата подключения'),
             nearestDate: field('Ближайшая дата подключения'),
