@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.1
+// @version      2.2.2
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
-// @author       You + ChatGPT
+// @author       Roman Yakovlev
 // @match        https://adviser-new.101internet.ru/orders/*
 // @updateURL    https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/101Internet-Tools-2.2.0.user.js
 // @downloadURL  https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/101Internet-Tools-2.2.0.user.js
