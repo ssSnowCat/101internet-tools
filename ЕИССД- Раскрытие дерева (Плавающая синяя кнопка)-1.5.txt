@@ -1,0 +1,96 @@
+// ==UserScript==
+// @name         ЕИССД: Раскрытие дерева (Плавающая синяя кнопка)
+// @namespace    http://tampermonkey.net
+// @version      1.5
+// @description  Синяя плавающая кнопка для раскрытия jQuery Treeview в ЕИССД, которая не улетает при скролле.
+// @author       Roman Yakovlev
+// @match        https://eissd.rt.ru/order/phys/*
+// @match        https://eissd.rt.ru/order/phys/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let isProcessing = false;
+
+    function expandComboTree() {
+        if (isProcessing) return;
+        isProcessing = true;
+
+        // Находим зоны плюсиков у неразвернутых веток дерева
+        const hitAreas = document.querySelectorAll('.combo-tree .expandable > .hitarea, .treeview .expandable > .hitarea');
+
+        if (hitAreas.length === 0) {
+            console.log('[ЕИССД]: Все доступные ветки дерева успешно развернуты.');
+            isProcessing = false;
+            return;
+        }
+
+        hitAreas.forEach(hitArea => {
+            const clickEvent = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            hitArea.dispatchEvent(clickEvent);
+        });
+
+        // Задержка на AJAX-подгрузку строк с сервера Ростелекома
+        setTimeout(() => {
+            isProcessing = false;
+            expandComboTree();
+        }, 400);
+    }
+
+    // Создание фиксированной плавающей кнопки
+    function createFloatingButton() {
+        // Проверяем дубликаты
+        if (document.getElementById('eissd-expand-btn-fixed')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'eissd-expand-btn-fixed';
+        btn.innerText = '🌳 Раскрыть дерево';
+
+        // Позиционирование 'fixed' привязывает кнопку к экрану, она "плавает" при скролле
+        Object.assign(btn.style, {
+            position: 'fixed',
+            top: '80px',            // Закреплена в верхней части экрана (на уровне блока общей информации)
+            right: '40px',          // Сдвинута к правому краю, в выделенную вами зону
+            zIndex: '999999',       // Максимальный приоритет видимости поверх любых таблиц и окон
+            padding: '8px 14px',
+            backgroundColor: '#1a73e8', // Насыщенный синий цвет
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontWeight: 'bold',
+            boxShadow: '0 3px 6px rgba(0,0,0,0.25)', // Красивая тень, подчеркивающая парение
+            fontSize: '12px',
+            fontFamily: 'sans-serif',
+            transition: 'background-color 0.15s ease, transform 0.1s ease'
+        });
+
+        // Визуальные эффекты при взаимодействии
+        btn.onmouseover = () => btn.style.backgroundColor = '#0b57d0'; // Темнеет при наведении
+        btn.onmouseout = () => btn.style.backgroundColor = '#1a73e8';
+        btn.onmousedown = () => btn.style.transform = 'scale(0.96)';   // Слегка вдавливается при клике
+        btn.onmouseup = () => btn.style.transform = 'scale(1)';
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // Защита от закрытия выпадающего списка ЕИССД при клике
+            expandComboTree();
+        });
+
+        document.body.appendChild(btn);
+        console.log('[ЕИССД]: Синяя плавающая кнопка успешно закреплена на экране.');
+    }
+
+    // Запуск инициализации кнопки
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', createFloatingButton);
+    } else {
+        createFloatingButton();
+    }
+})();
