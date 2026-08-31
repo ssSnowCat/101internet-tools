@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.3
+// @version      2.2.5
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
 // @author       Roman Yakovlev
 // @match        https://adviser-new.101internet.ru/orders/*
@@ -45,6 +45,12 @@
 по адресу: {Адрес}.
 Дата подключения: {дата}.
 Если возникнут проблемы с подключением - сразу звоните по номеру 88007074234 мы поможем`
+        }
+        ,
+        {
+            id: 'contact_data',
+            name: 'Кон.данные',
+            text: `Здравствуйте! Узнайте доступные тарифы и провайдеров для вашего дома на сайте 101internet.ru. Наш телефон круглосуточно и бесплатно: 88003028654`
         }
     ];
 
@@ -233,18 +239,41 @@
 
     function openRegion() {
         if (!settings.region) return;
-        if (!window.TM101RegionModule || typeof window.TM101RegionModule.createPanel !== 'function') {
-            alert('Модуль определения региона ещё не загрузился.');
-            return;
-        }
 
-        const old = document.getElementById('tm-rf-region-panel');
-        if (old) {
-            old.classList.remove('tm-rf-minimized');
-            return;
-        }
+        const open = () => {
+            const api = window.TM101RegionModule;
 
-        window.TM101RegionModule.createPanel();
+            if (api && typeof api.createPanel === 'function') {
+                const old = document.getElementById('tm-rf-region-panel');
+
+                if (old) {
+                    old.classList.remove('tm-rf-minimized');
+                    return true;
+                }
+
+                api.createPanel();
+                return true;
+            }
+
+            return false;
+        };
+
+        if (open()) return;
+
+        // Короткое ожидание на случай, если модуль региона
+        // регистрируется немного позже при загрузке страницы.
+        let attempts = 0;
+        const timer = setInterval(() => {
+            attempts += 1;
+
+            if (open() || attempts >= 20) {
+                clearInterval(timer);
+
+                if (attempts >= 20 && !window.TM101RegionModule) {
+                    alert('Не удалось загрузить модуль определения региона. Обновите страницу и попробуйте ещё раз.');
+                }
+            }
+        }, 100);
     }
 
     function createShell() {
@@ -4980,6 +5009,13 @@
     }
 
 
+    // API регистрируем ДО запуска инициализации.
+    // Это исключает гонку между общей панелью и модулем региона.
+    window.TM101RegionModule = {
+        createPanel,
+        isOrdersPage
+    };
+
     // =========================================================
     // ЗАПУСК
     // =========================================================
@@ -5001,11 +5037,5 @@
         init();
 
     }
-
-    // API для общей панели
-    window.TM101RegionModule = {
-        createPanel,
-        isOrdersPage
-    };
 
 })();
