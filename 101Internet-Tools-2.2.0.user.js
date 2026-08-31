@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         101Internet Tools — Общая коробка
+// @name         101Internet Tools — Общая коробка 2.2.3
 // @namespace    https://adviser-new.101internet.ru/
 // @version      2.2.2
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
@@ -3064,6 +3064,38 @@
             .filter(Boolean);
     }
 
+
+    // =========================================================
+    // АВТОПОДСКАЗКИ ГОРОДОВ
+    // =========================================================
+
+    async function getCitySuggestions(query, limit = 10) {
+        const value = normalizeCity(query);
+
+        if (value.length < 2) {
+            return [];
+        }
+
+        const db = await loadCityDb();
+        const prefix = [];
+        const contains = [];
+
+        for (const cityName of Object.keys(db)) {
+            if (cityName.startsWith(value)) {
+                prefix.push(cityName);
+            } else if (cityName.includes(value)) {
+                contains.push(cityName);
+            }
+        }
+
+        return prefix
+            .sort((a, b) => a.localeCompare(b, 'ru'))
+            .concat(
+                contains.sort((a, b) => a.localeCompare(b, 'ru'))
+            )
+            .slice(0, limit);
+    }
+
     async function searchLocalCity(city) {
         const regions = await findLocalCityRegions(city);
 
@@ -3951,6 +3983,55 @@
             }
 
 
+
+            .tm-rf-input-wrap {
+                position: relative;
+                margin-bottom: 8px;
+            }
+
+            .tm-rf-input-wrap #tm-rf-city {
+                margin-bottom: 0;
+            }
+
+            .tm-rf-suggestions {
+                position: absolute;
+                top: calc(100% + 4px);
+                left: 0;
+                right: 0;
+                z-index: 2147483647;
+                display: none;
+                max-height: 260px;
+                overflow-y: auto;
+                padding: 4px;
+                background: #ffffff;
+                border: 1px solid #d1d5db;
+                border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(0,0,0,.18);
+            }
+
+            .tm-rf-suggestions.tm-rf-suggestions-open {
+                display: block;
+            }
+
+            .tm-rf-suggestion {
+                width: 100%;
+                display: flex;
+                align-items: center;
+                padding: 10px 12px;
+                border: 0;
+                border-radius: 6px;
+                background: transparent;
+                color: #111827;
+                text-align: left;
+                font-size: 14px;
+                cursor: pointer;
+            }
+
+            .tm-rf-suggestion:hover,
+            .tm-rf-suggestion.tm-rf-suggestion-active {
+                background: #eef4ff;
+            }
+
             #tm-rf-city:focus {
 
                 border-color:
@@ -4474,13 +4555,22 @@
 
             <div class="tm-rf-body">
 
-                <input
-                    id="tm-rf-city"
-                    type="text"
-                    placeholder="Введите город..."
-                    autocomplete="off"
-                    spellcheck="false"
-                >
+                <div class="tm-rf-input-wrap">
+
+                    <input
+                        id="tm-rf-city"
+                        type="text"
+                        placeholder="Введите город..."
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+
+                    <div
+                        id="tm-rf-suggestions"
+                        class="tm-rf-suggestions"
+                    ></div>
+
+                </div>
 
 
                 <button
@@ -4510,6 +4600,12 @@
         const input =
             document.getElementById(
                 'tm-rf-city'
+            );
+
+
+        const suggestions =
+            document.getElementById(
+                'tm-rf-suggestions'
             );
 
 
@@ -4547,22 +4643,188 @@
         );
 
 
-        // Enter
+        // =====================================================
+        // АВТОПОДСКАЗКИ
+        // =====================================================
+
+        let currentSuggestions = [];
+        let activeSuggestionIndex = -1;
+        let suggestionRequestId = 0;
+
+        function hideSuggestions() {
+            suggestions.classList.remove(
+                'tm-rf-suggestions-open'
+            );
+            suggestions.innerHTML = '';
+            activeSuggestionIndex = -1;
+        }
+
+        function selectSuggestion(cityName) {
+            input.value = cityName;
+            hideSuggestions();
+            searchCity();
+        }
+
+        function renderSuggestions(items) {
+            suggestions.innerHTML = '';
+
+            items.forEach(function (cityName, index) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'tm-rf-suggestion';
+                button.textContent = cityName;
+
+                button.addEventListener(
+                    'mousedown',
+                    function (event) {
+                        event.preventDefault();
+                        selectSuggestion(cityName);
+                    }
+                );
+
+                suggestions.appendChild(button);
+            });
+
+            if (items.length) {
+                suggestions.classList.add(
+                    'tm-rf-suggestions-open'
+                );
+            } else {
+                hideSuggestions();
+            }
+        }
+
+        input.addEventListener(
+            'input',
+            async function () {
+                const requestId = ++suggestionRequestId;
+                const value = input.value;
+
+                if (normalizeCity(value).length < 2) {
+                    currentSuggestions = [];
+                    hideSuggestions();
+                    return;
+                }
+
+                try {
+                    const items =
+                        await getCitySuggestions(value, 10);
+
+                    if (requestId !== suggestionRequestId) {
+                        return;
+                    }
+
+                    currentSuggestions = items;
+                    activeSuggestionIndex = -1;
+                    renderSuggestions(items);
+
+                } catch (error) {
+                    currentSuggestions = [];
+                    hideSuggestions();
+                    console.error(
+                        'Ошибка автоподсказок городов:',
+                        error
+                    );
+                }
+            }
+        );
+
 
         input.addEventListener(
             'keydown',
             function (event) {
 
-                if (
-                    event.key === 'Enter'
-                ) {
+                const buttons =
+                    Array.from(
+                        suggestions.querySelectorAll(
+                            '.tm-rf-suggestion'
+                        )
+                    );
 
+                if (
+                    event.key === 'ArrowDown' &&
+                    currentSuggestions.length
+                ) {
                     event.preventDefault();
 
-                    searchCity();
+                    activeSuggestionIndex =
+                        Math.min(
+                            activeSuggestionIndex + 1,
+                            currentSuggestions.length - 1
+                        );
 
+                    buttons.forEach(
+                        function (button, index) {
+                            button.classList.toggle(
+                                'tm-rf-suggestion-active',
+                                index === activeSuggestionIndex
+                            );
+                        }
+                    );
+
+                    return;
                 }
 
+                if (
+                    event.key === 'ArrowUp' &&
+                    currentSuggestions.length
+                ) {
+                    event.preventDefault();
+
+                    activeSuggestionIndex =
+                        Math.max(
+                            activeSuggestionIndex - 1,
+                            0
+                        );
+
+                    buttons.forEach(
+                        function (button, index) {
+                            button.classList.toggle(
+                                'tm-rf-suggestion-active',
+                                index === activeSuggestionIndex
+                            );
+                        }
+                    );
+
+                    return;
+                }
+
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+
+                    if (
+                        activeSuggestionIndex >= 0 &&
+                        currentSuggestions[
+                            activeSuggestionIndex
+                        ]
+                    ) {
+                        selectSuggestion(
+                            currentSuggestions[
+                                activeSuggestionIndex
+                            ]
+                        );
+                    } else {
+                        hideSuggestions();
+                        searchCity();
+                    }
+
+                    return;
+                }
+
+                if (event.key === 'Escape') {
+                    hideSuggestions();
+                }
+            }
+        );
+
+
+        input.addEventListener(
+            'blur',
+            function () {
+                setTimeout(
+                    hideSuggestions,
+                    150
+                );
             }
         );
 
