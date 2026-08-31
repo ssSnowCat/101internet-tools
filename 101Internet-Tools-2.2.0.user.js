@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.2
+// @version      2.2.3
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
 // @author       Roman Yakovlev
 // @match        https://adviser-new.101internet.ru/orders/*
