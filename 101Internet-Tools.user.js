@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.23
+// @version      2.2.36
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
 // @author       Roman Yakovlev
 // @match        https://adviser-new.101internet.ru/orders/*
@@ -5136,7 +5136,7 @@
         // В CSV один провайдер может повторяться в нескольких колонках:
         // Билайн | Билайн | Билайн | пусто | МТС | МТС | МТС | ...
         // Поэтому нельзя брать только последнее совпадение колонки.
-        const providerNames = ['билайн', 'мтс', 'мгтс', 'ростелеком', 'мегафон', 'ттк', 'дом.ру', 'онлайм', 'инетком'];
+        const providerNames = ['билайн', 'мтс', 'мгтс', 'ростелеком', 'мегафон', 'ттк', 'дом.ру', 'онлайм', 'инетком', 'evo'];
         let headerIndex = rows.findIndex(row => {
             const cells = row.map(key);
             const hits = providerNames.filter(name => cells.some(v => v === name || v.includes(name)));
@@ -5275,9 +5275,30 @@
             })
         };
 
-        console.debug('[101Internet] Сроки разобраны 2.2.23:', loadDiagnostics.terms);
+        // Список провайдеров берём непосредственно из строки заголовков
+        // Google Sheets. Это теперь является источником истины: оператор,
+        // которого нет в Google-таблице, не должен попадать в окно сроков.
+        const availableProviderKeys = [...new Set(
+            header
+                .map(value => providerInfo(value)?.key || null)
+                .filter(Boolean)
+        )];
 
-        return { header, data, loadedAt: Date.now() };
+        const availableProviderNames = [...new Set(
+            header
+                .map(value => norm(value))
+                .filter(value => providerInfo(value))
+        )];
+
+        loadDiagnostics.terms = {
+            ...loadDiagnostics.terms,
+            availableProviderKeys,
+            availableProviderNames
+        };
+
+        console.debug('[101Internet] Сроки разобраны 2.2.34:', loadDiagnostics.terms);
+
+        return { header, data, providerColumns, availableProviderKeys, availableProviderNames, loadedAt: Date.now() };
     }
 
     function parseRestrictions(csv) {
@@ -5509,6 +5530,22 @@
         return result;
     }
 
+    // Строгое распознавание названия провайдера.
+    // Нельзя использовать providerInfo() здесь, потому что он умеет искать
+    // алиас внутри произвольного текста. Например строка истории заявки
+    // «... Тариф: Супер 1000 МТС ...» ошибочно определялась как МТС.
+    function exactProviderInfo(label) {
+        const clean = key(label)
+            .replace(/[^a-zа-я0-9.]+/gi, ' ')
+            .trim();
+        if (!clean) return null;
+
+        for (const alias of Object.keys(PROVIDERS)) {
+            if (clean === key(alias)) return PROVIDERS[alias];
+        }
+        return null;
+    }
+
     function providerInfo(label) {
         const clean = key(label)
             .replace(/[^a-zа-я0-9.]+/gi, ' ')
@@ -5736,6 +5773,7 @@
         console.debug('[TM101 PartnerTerms]', {
             mainCard: !!mainCard,
             checkCard: !!checkCard,
+            googleProviders: Array.from(getGoogleProviderKeys()),
             mainPartners: mainPartners.map(p => p.name),
             checkPartners: checkPartners.map(p => p.name)
         });
@@ -5751,12 +5789,12 @@
             ].filter(Boolean).join(' · ');
 
             const rows = providers.map(provider => {
-                const rawTerm = place?.providers?.[provider.key] || null;
+                const rawTerm = place?.providers?.[provider.dataKey || provider.key] || null;
                 const term = typeof rawTerm === 'object' && rawTerm !== null
                     ? String(rawTerm.days ?? '')
                     : String(rawTerm || '');
                 const stale = typeof rawTerm === 'object' && rawTerm !== null ? !!rawTerm.stale : false;
-                const restrictions = findRestrictions(provider.key, address.places);
+                const restrictions = findRestrictions(provider.dataKey || provider.key, address.places);
                 let valueHtml = term
                     ? `<span class="tm101-pt-days${stale ? ' tm101-pt-stale' : ''}">${escapeHtml(term)} ${Number(term) === 1 ? 'день' : Number(term) >= 2 && Number(term) <= 4 ? 'дня' : 'дней'}${stale ? ' <span class="tm101-pt-stale-note">(информация старше 7 дней)</span>' : ''}</span>`
                     : `<span class="tm101-pt-muted">нет данных</span>`;
@@ -5786,155 +5824,215 @@
 
         const addProvider = rawText => {
             const text = norm(rawText);
-            if (!text) return;
+            if (!text) return false;
             const normalized = key(text);
-            if (!normalized || normalized === 'наши партнеры') return;
+            if (!normalized || normalized === 'наши партнеры') return false;
 
-            // Провайдеры определяются ТОЛЬКО по тексту элементов <p>.
-            // Класс MUI может меняться (css-..., MuiTypography-...), поэтому
-            // на него не опираемся.
-            const known = providerInfo(text);
+            const known = exactProviderInfo(text);
+            if (!known) return false;
 
-            // ВАЖНО: оператор берётся из блока «Наши партнёры» независимо
-            // от наличия этого оператора в Google Таблице и PROVIDERS.
-            // Если оператора нет в таблице — он всё равно показывается,
-            // а срок подключения отображается как «нет данных».
-            const provider = known || {
-                key: `unknown:${normalized}`,
-                name: text,
-                alias: text
-            };
+            const googleProviderKeys = getGoogleProviderKeys();
+            if (!googleProviderKeys.has(known.key)) return false;
 
-            const identity = provider.key;
-            if (seen.has(identity)) return;
+            const identity = known.key;
+            if (seen.has(identity)) return false;
             seen.add(identity);
-            providers.push({ ...provider, displayName: text });
+            providers.push({ ...known, displayName: text });
+            return true;
         };
 
-        // 1. Новый/основной вариант: рядом с «Наши партнёры» есть отдельный
-        // контейнер, внутри которого провайдеры представлены обычными <p>:
-        // <div ...>
-        //   <p> EО </p><p>t2</p><p>МегаФон</p><p>Ростелеком</p>
-        // </div>
-        // Классы контейнера и самих <p> намеренно игнорируем.
-        let ancestor = partnerTitle.parentElement;
-        for (let level = 0; ancestor && level < 8; level++, ancestor = ancestor.parentElement) {
-            const candidates = [];
-            let node = ancestor;
-
-            // Проверяем соседние элементы на каждом уровне вложенности.
-            while (node && node.parentElement === ancestor) {
-                if (node !== partnerTitle && node.querySelectorAll) {
-                    const ps = Array.from(node.querySelectorAll('p'));
-                    if (ps.length) {
-                        ps.forEach(p => {
-                            if (p.children.length === 0) addProvider(p.textContent);
-                        });
-                        if (providers.length) break;
-                    }
-                }
-                node = node.nextElementSibling;
-            }
-            if (providers.length) return providers;
-        }
-
-        // 2. Ищем непосредственно следующий контейнер после элемента
-        // «Наши партнёры» и берём из него ВСЕ текстовые <p>, независимо от
-        // MUI-классов/кода CSS.
-        let sibling = partnerTitle.nextElementSibling;
-        for (let i = 0; sibling && i < 4; i++, sibling = sibling.nextElementSibling) {
-            Array.from(sibling.querySelectorAll?.('p') || []).forEach(p => {
-                if (p.children.length === 0) addProvider(p.textContent);
-            });
-            if (providers.length) return providers;
-        }
-
-        // 3. Расширенный fallback: весь DOM после «Наши партнёры» внутри
-        // текущего адресного блока. Берём только <p>, распознаваемые как
-        // провайдеры, поэтому любые изменения классов/вложенности MUI не
-        // влияют на поиск.
+        // ВАЖНО: в Adviser MUI-класс элемента провайдера может полностью
+        // отличаться. Например:
+        // <p class="MuiTypography-root MuiTypography-body2 css-1s8bwcg">МегаФон</p>
+        // Поэтому ищем НЕ по className, а по тексту всех конечных <p>.
+        // Сначала определяем границы текущего адресного блока.
         const headings = Array.from(document.querySelectorAll('h6'));
-        const addressHeading = headings.find(h => {
+        const currentAddressHeading = headings.find(h => {
             const pos = h.compareDocumentPosition(partnerTitle);
             return (pos & Node.DOCUMENT_POSITION_FOLLOWING) &&
                 (norm(h.textContent) === 'Основной адрес' || norm(h.textContent) === 'Проверочный поиск');
         });
 
-        if (addressHeading) {
-            let afterTitle = false;
-            for (const p of Array.from(document.querySelectorAll('p'))) {
-                if (p === partnerTitle) {
-                    afterTitle = true;
-                    continue;
-                }
-                if (!afterTitle) continue;
+        const currentIndex = currentAddressHeading ? headings.indexOf(currentAddressHeading) : -1;
+        const nextAddressHeading = currentIndex >= 0
+            ? headings.slice(currentIndex + 1).find(h =>
+                norm(h.textContent) === 'Основной адрес' || norm(h.textContent) === 'Проверочный поиск')
+            : null;
 
-                // Не переходим в следующий адресный блок.
-                const nearestH6 = p.closest('div')?.querySelector('h6');
-                if (nearestH6 && nearestH6 !== addressHeading &&
-                    (norm(nearestH6.textContent) === 'Основной адрес' || norm(nearestH6.textContent) === 'Проверочный поиск')) {
-                    break;
-                }
+        // Берём ВСЕ leaf-элементы <p> после «Наши партнёры».
+        // Останавливаемся на следующем адресном заголовке.
+        const allP = Array.from(document.querySelectorAll('p'));
+        let started = false;
 
-                if (p.children.length === 0) addProvider(p.textContent);
+        for (const p of allP) {
+            if (p === partnerTitle) {
+                started = true;
+                continue;
+            }
+            if (!started) continue;
+
+            if (nextAddressHeading) {
+                const posToNext = nextAddressHeading.compareDocumentPosition(p);
+                if (posToNext & Node.DOCUMENT_POSITION_FOLLOWING) break;
+            }
+
+            // Берём только конечные <p>, чтобы не получить составной текст
+            // родительского контейнера.
+            if (p.children.length !== 0) continue;
+            addProvider(p.textContent);
+        }
+
+        // Если глобальный проход ничего не дал, пробуем ближайшие соседние
+        // контейнеры — это покрывает варианты, где виртуальный DOM меняет
+        // порядок узлов вокруг заголовка.
+        if (!providers.length) {
+            let node = partnerTitle;
+            for (let level = 0; node && level < 8 && !providers.length; level++, node = node.parentElement) {
+                let sibling = node.nextElementSibling;
+                for (let i = 0; sibling && i < 6; i++, sibling = sibling.nextElementSibling) {
+                    const ps = sibling.matches?.('p')
+                        ? [sibling]
+                        : Array.from(sibling.querySelectorAll?.('p') || []);
+                    ps.forEach(p => {
+                        if (p.children.length === 0) addProvider(p.textContent);
+                    });
+                    if (providers.length) break;
+                }
             }
         }
+
+        console.debug('[TM101 PartnerTerms] extractPartnerItemsFromTitle:', {
+            title: norm(partnerTitle.textContent),
+            providers: providers.map(p => p.displayName || p.name)
+        });
 
         return providers;
     }
 
+
+    function getGoogleProviderKeys() {
+        // Источник истины — заголовок листа «Завалы монтажников».
+        // Поддерживаем старый кеш: если в нём ещё нет availableProviderKeys,
+        // восстанавливаем список из сохранённого header.
+        if (Array.isArray(termsData?.availableProviderKeys)) {
+            return new Set(termsData.availableProviderKeys);
+        }
+
+        const header = Array.isArray(termsData?.header) ? termsData.header : [];
+        const keys = header
+            .map(value => providerInfo(value)?.key || null)
+            .filter(Boolean);
+        return new Set(keys);
+    }
+
     function findPartnersForAddressTitle(addressTitle) {
-        // Не пытаемся определить карточку через MuiPaper/MuiGrid.
-        // Ищем заголовок адресного блока, затем ближайший p «Наши партнёры»
-        // в его логическом блоке. Это устраняет зависимость от классов MUI.
+        // Не ищем провайдеров только рядом с текстом «Наши партнёры».
+        // В Adviser разные провайдеры могут находиться в разных <p> и иметь
+        // разные MUI-классы. Поэтому берём весь текущий адресный блок и
+        // собираем из него все известные названия провайдеров.
+        const providers = [];
+        const seen = new Set();
+
+        const addProvider = rawText => {
+            const text = norm(rawText);
+            if (!text) return;
+
+            const info = exactProviderInfo(text);
+            if (!info) return;
+
+            // Обычно показываем только тех операторов, для которых есть
+            // группа в Google Sheets. Но Ростелеком и его партнёр t2 должны
+            // отображаться всегда, если они есть в Adviser: для них отсутствие
+            // группы/строки в Google Sheets означает просто «нет данных», а не
+            // отсутствие самого оператора по адресу.
+            const googleProviderKeys = getGoogleProviderKeys();
+            const isRostelecomFamily = info.key === 'ростелеком';
+            if (!googleProviderKeys.has(info.key) && !isRostelecomFamily) return;
+
+            // t2 и Ростелеком — разные партнёры в Adviser, но используют
+            // одну и ту же группу данных Ростелекома в Google Sheets.
+            // Поэтому нельзя дедуплицировать их только по info.key.
+            // Дедупликация идёт по фактическому названию провайдера в Adviser,
+            // а info.key остаётся ключом для получения данных из таблицы.
+            const identity = key(text);
+            if (seen.has(identity)) return;
+            seen.add(identity);
+            providers.push({ ...info, displayName: text, dataKey: info.key });
+        };
+
         const headings = Array.from(document.querySelectorAll('h6'));
         const heading = headings.find(h => norm(h.textContent) === addressTitle);
+
         if (!heading) {
             console.warn('[101Internet] Не найден заголовок адреса:', addressTitle);
             return [];
         }
 
-        // Сначала ищем p «Наши партнёры» среди элементов после h6 до
-        // следующего h6. У текущего Adviser это ровно нужный блок.
-        const allP = Array.from(document.querySelectorAll('p'));
-        const headingIndex = Array.from(document.querySelectorAll('h6')).indexOf(heading);
-        const nextHeading = headings[headingIndex + 1] || null;
-        const nextHeadingIndex = nextHeading ? allP.findIndex(p => {
-            const parentHeading = p.closest('div')?.querySelector('h6');
-            return parentHeading === nextHeading;
-        }) : -1;
+        const headingIndex = headings.indexOf(heading);
+        const nextAddressHeading = headings.slice(headingIndex + 1).find(h => {
+            const t = norm(h.textContent);
+            return t === 'Основной адрес' || t === 'Проверочный поиск';
+        }) || null;
 
-        let started = false;
+        const allP = Array.from(document.querySelectorAll('p'));
+
+        let inside = false;
         for (const p of allP) {
-            if (!started) {
-                // После h6 в DOM-порядке.
+            if (!inside) {
                 const pos = heading.compareDocumentPosition(p);
                 if (!(pos & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-                started = true;
+                inside = true;
             }
-            if (nextHeading && nextHeading.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) {
-                break;
+
+            // Следующий адресный блок — граница текущего блока.
+            if (nextAddressHeading) {
+                const pos = nextAddressHeading.compareDocumentPosition(p);
+                if (pos & Node.DOCUMENT_POSITION_FOLLOWING) break;
             }
-            if (key(p.textContent) === 'наши партнеры') {
-                const result = extractPartnerItemsFromTitle(p);
-                console.log('[101Internet] Партнёры для', addressTitle, result.map(x => x.name));
-                return result;
+
+            // CSS-класс НЕ используется. Берём точное текстовое имя провайдера.
+            addProvider(p.textContent);
+        }
+
+        // Если из-за виртуализированного DOM часть <p> оказалась вне
+        // ожидаемого диапазона, дополнительно смотрим контейнер самого
+        // «Наши партнёры» и его ближайших родителей/соседей.
+        const partnerTitles = allP.filter(p => key(p.textContent) === 'наши партнеры');
+
+        for (const partnerTitle of partnerTitles) {
+            const pos = heading.compareDocumentPosition(partnerTitle);
+            if (!(pos & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+
+            if (nextAddressHeading) {
+                const posToNext = nextAddressHeading.compareDocumentPosition(partnerTitle);
+                if (!(posToNext & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+            }
+
+            let node = partnerTitle;
+            for (let level = 0; node && level < 8; level++, node = node.parentElement) {
+                const candidates = [];
+
+                if (node.matches?.('p')) candidates.push(node);
+                candidates.push(...Array.from(node.querySelectorAll?.('p') || []));
+
+                // Берём также соседние контейнеры: это покрывает случай,
+                // когда провайдеры вынесены в отдельные MUI Grid-элементы.
+                let sibling = node.nextElementSibling;
+                for (let i = 0; sibling && i < 8; i++, sibling = sibling.nextElementSibling) {
+                    if (sibling.matches?.('p')) candidates.push(sibling);
+                    candidates.push(...Array.from(sibling.querySelectorAll?.('p') || []));
+                }
+
+                candidates.forEach(p => {
+                    if (p.children.length === 0) addProvider(p.textContent);
+                });
             }
         }
 
-        // Надёжный fallback: ближайший «Наши партнёры» после h6.
-        for (const p of allP) {
-            if (key(p.textContent) !== 'наши партнеры') continue;
-            const pos = heading.compareDocumentPosition(p);
-            if (pos & Node.DOCUMENT_POSITION_FOLLOWING) {
-                const result = extractPartnerItemsFromTitle(p);
-                console.log('[101Internet] Партнёры fallback для', addressTitle, result.map(x => x.name));
-                return result;
-            }
-        }
+        console.debug('[101Internet] Все провайдеры для', addressTitle,
+            providers.map(x => x.displayName || x.name));
 
-        console.warn('[101Internet] Не найден блок «Наши партнёры» для', addressTitle);
-        return [];
+        return providers;
     }
 
     // Оставляем совместимость со старыми вызовами модуля.
