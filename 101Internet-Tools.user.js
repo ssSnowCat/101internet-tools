@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.5
+// @version      2.2.23
 // @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
 // @author       Roman Yakovlev
 // @match        https://adviser-new.101internet.ru/orders/*
 // @updateURL    https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/101Internet-Tools-2.2.0.user.js
 // @downloadURL  https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/101Internet-Tools-2.2.0.user.js
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      docs.google.com
+// @connect      docs.googleusercontent.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -45,12 +48,6 @@
 по адресу: {Адрес}.
 Дата подключения: {дата}.
 Если возникнут проблемы с подключением - сразу звоните по номеру 88007074234 мы поможем`
-        }
-        ,
-        {
-            id: 'contact_data',
-            name: 'Кон.данные',
-            text: `Здравствуйте! Узнайте доступные тарифы и провайдеров для вашего дома на сайте 101internet.ru. Наш телефон круглосуточно и бесплатно: 88003028654`
         }
     ];
 
@@ -173,7 +170,7 @@
        function providerFromLandLink() {
             for (const link of document.querySelectorAll('a[href]')) {
                 const text = normalize(link.textContent);
-                const match = text.match(/^ленд\s*:\s*(.+)$/i);
+                                const match = text.match(/google\.visualization\.Query\.setResponse\s*\(([\s\S]*)\)\s*;?\s*$/);
 
                 if (match) {
                     return clean(match[1], 'Не выбран');
@@ -239,41 +236,18 @@
 
     function openRegion() {
         if (!settings.region) return;
+        if (!window.TM101RegionModule || typeof window.TM101RegionModule.createPanel !== 'function') {
+            alert('Модуль определения региона ещё не загрузился.');
+            return;
+        }
 
-        const open = () => {
-            const api = window.TM101RegionModule;
+        const old = document.getElementById('tm-rf-region-panel');
+        if (old) {
+            old.classList.remove('tm-rf-minimized');
+            return;
+        }
 
-            if (api && typeof api.createPanel === 'function') {
-                const old = document.getElementById('tm-rf-region-panel');
-
-                if (old) {
-                    old.classList.remove('tm-rf-minimized');
-                    return true;
-                }
-
-                api.createPanel();
-                return true;
-            }
-
-            return false;
-        };
-
-        if (open()) return;
-
-        // Короткое ожидание на случай, если модуль региона
-        // регистрируется немного позже при загрузке страницы.
-        let attempts = 0;
-        const timer = setInterval(() => {
-            attempts += 1;
-
-            if (open() || attempts >= 20) {
-                clearInterval(timer);
-
-                if (attempts >= 20 && !window.TM101RegionModule) {
-                    alert('Не удалось загрузить модуль определения региона. Обновите страницу и попробуйте ещё раз.');
-                }
-            }
-        }, 100);
+        window.TM101RegionModule.createPanel();
     }
 
     function createShell() {
@@ -310,6 +284,13 @@
                         </label>
                         <div class="tm101-name">🇷🇺 Определение региона</div>
                         <button type="button" class="tm101-action" id="tm101-region">Открыть</button>
+                    </div>
+                </div>
+
+                <div class="tm101-section">
+                    <div class="tm101-row">
+                        <div class="tm101-name">⏱ Сроки подключения</div>
+                        <button type="button" class="tm101-action" id="tm101-partner-terms">Открыть</button>
                     </div>
                 </div>
 
@@ -421,6 +402,25 @@
                 return;
             }
             openRegion();
+        });
+
+        panel.querySelector('#tm101-partner-terms').addEventListener('click', async (event) => {
+            try {
+                if (!window.TM101PartnerTermsModule || typeof window.TM101PartnerTermsModule.open !== 'function') {
+                    throw new Error('Модуль сроков ещё не загрузился.');
+                }
+                const button = event.currentTarget;
+                button.disabled = true;
+                button.textContent = 'Загрузка…';
+                await window.TM101PartnerTermsModule.open();
+                setStatus('Сроки подключения открыты');
+            } catch (e) {
+                console.error(e);
+                setStatus('Ошибка: ' + e.message);
+            } finally {
+                const button = panel.querySelector('#tm101-partner-terms');
+                if (button) { button.disabled = false; button.textContent = 'Открыть'; }
+            }
         });
 
         panel.querySelector('#tm101-sms-preview-btn').addEventListener('click', () => {
@@ -768,6 +768,9 @@
 // @author       You
 // @match        https://adviser-new.101internet.ru/orders/*
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      docs.google.com
+// @connect      docs.googleusercontent.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -3093,38 +3096,6 @@
             .filter(Boolean);
     }
 
-
-    // =========================================================
-    // АВТОПОДСКАЗКИ ГОРОДОВ
-    // =========================================================
-
-    async function getCitySuggestions(query, limit = 10) {
-        const value = normalizeCity(query);
-
-        if (value.length < 2) {
-            return [];
-        }
-
-        const db = await loadCityDb();
-        const prefix = [];
-        const contains = [];
-
-        for (const cityName of Object.keys(db)) {
-            if (cityName.startsWith(value)) {
-                prefix.push(cityName);
-            } else if (cityName.includes(value)) {
-                contains.push(cityName);
-            }
-        }
-
-        return prefix
-            .sort((a, b) => a.localeCompare(b, 'ru'))
-            .concat(
-                contains.sort((a, b) => a.localeCompare(b, 'ru'))
-            )
-            .slice(0, limit);
-    }
-
     async function searchLocalCity(city) {
         const regions = await findLocalCityRegions(city);
 
@@ -4012,55 +3983,6 @@
             }
 
 
-
-            .tm-rf-input-wrap {
-                position: relative;
-                margin-bottom: 8px;
-            }
-
-            .tm-rf-input-wrap #tm-rf-city {
-                margin-bottom: 0;
-            }
-
-            .tm-rf-suggestions {
-                position: absolute;
-                top: calc(100% + 4px);
-                left: 0;
-                right: 0;
-                z-index: 2147483647;
-                display: none;
-                max-height: 260px;
-                overflow-y: auto;
-                padding: 4px;
-                background: #ffffff;
-                border: 1px solid #d1d5db;
-                border-radius: 8px;
-                box-shadow: 0 8px 24px rgba(0,0,0,.18);
-            }
-
-            .tm-rf-suggestions.tm-rf-suggestions-open {
-                display: block;
-            }
-
-            .tm-rf-suggestion {
-                width: 100%;
-                display: flex;
-                align-items: center;
-                padding: 10px 12px;
-                border: 0;
-                border-radius: 6px;
-                background: transparent;
-                color: #111827;
-                text-align: left;
-                font-size: 14px;
-                cursor: pointer;
-            }
-
-            .tm-rf-suggestion:hover,
-            .tm-rf-suggestion.tm-rf-suggestion-active {
-                background: #eef4ff;
-            }
-
             #tm-rf-city:focus {
 
                 border-color:
@@ -4584,22 +4506,13 @@
 
             <div class="tm-rf-body">
 
-                <div class="tm-rf-input-wrap">
-
-                    <input
-                        id="tm-rf-city"
-                        type="text"
-                        placeholder="Введите город..."
-                        autocomplete="off"
-                        spellcheck="false"
-                    >
-
-                    <div
-                        id="tm-rf-suggestions"
-                        class="tm-rf-suggestions"
-                    ></div>
-
-                </div>
+                <input
+                    id="tm-rf-city"
+                    type="text"
+                    placeholder="Введите город..."
+                    autocomplete="off"
+                    spellcheck="false"
+                >
 
 
                 <button
@@ -4629,12 +4542,6 @@
         const input =
             document.getElementById(
                 'tm-rf-city'
-            );
-
-
-        const suggestions =
-            document.getElementById(
-                'tm-rf-suggestions'
             );
 
 
@@ -4672,188 +4579,22 @@
         );
 
 
-        // =====================================================
-        // АВТОПОДСКАЗКИ
-        // =====================================================
-
-        let currentSuggestions = [];
-        let activeSuggestionIndex = -1;
-        let suggestionRequestId = 0;
-
-        function hideSuggestions() {
-            suggestions.classList.remove(
-                'tm-rf-suggestions-open'
-            );
-            suggestions.innerHTML = '';
-            activeSuggestionIndex = -1;
-        }
-
-        function selectSuggestion(cityName) {
-            input.value = cityName;
-            hideSuggestions();
-            searchCity();
-        }
-
-        function renderSuggestions(items) {
-            suggestions.innerHTML = '';
-
-            items.forEach(function (cityName, index) {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'tm-rf-suggestion';
-                button.textContent = cityName;
-
-                button.addEventListener(
-                    'mousedown',
-                    function (event) {
-                        event.preventDefault();
-                        selectSuggestion(cityName);
-                    }
-                );
-
-                suggestions.appendChild(button);
-            });
-
-            if (items.length) {
-                suggestions.classList.add(
-                    'tm-rf-suggestions-open'
-                );
-            } else {
-                hideSuggestions();
-            }
-        }
-
-        input.addEventListener(
-            'input',
-            async function () {
-                const requestId = ++suggestionRequestId;
-                const value = input.value;
-
-                if (normalizeCity(value).length < 2) {
-                    currentSuggestions = [];
-                    hideSuggestions();
-                    return;
-                }
-
-                try {
-                    const items =
-                        await getCitySuggestions(value, 10);
-
-                    if (requestId !== suggestionRequestId) {
-                        return;
-                    }
-
-                    currentSuggestions = items;
-                    activeSuggestionIndex = -1;
-                    renderSuggestions(items);
-
-                } catch (error) {
-                    currentSuggestions = [];
-                    hideSuggestions();
-                    console.error(
-                        'Ошибка автоподсказок городов:',
-                        error
-                    );
-                }
-            }
-        );
-
+        // Enter
 
         input.addEventListener(
             'keydown',
             function (event) {
 
-                const buttons =
-                    Array.from(
-                        suggestions.querySelectorAll(
-                            '.tm-rf-suggestion'
-                        )
-                    );
-
                 if (
-                    event.key === 'ArrowDown' &&
-                    currentSuggestions.length
+                    event.key === 'Enter'
                 ) {
+
                     event.preventDefault();
 
-                    activeSuggestionIndex =
-                        Math.min(
-                            activeSuggestionIndex + 1,
-                            currentSuggestions.length - 1
-                        );
+                    searchCity();
 
-                    buttons.forEach(
-                        function (button, index) {
-                            button.classList.toggle(
-                                'tm-rf-suggestion-active',
-                                index === activeSuggestionIndex
-                            );
-                        }
-                    );
-
-                    return;
                 }
 
-                if (
-                    event.key === 'ArrowUp' &&
-                    currentSuggestions.length
-                ) {
-                    event.preventDefault();
-
-                    activeSuggestionIndex =
-                        Math.max(
-                            activeSuggestionIndex - 1,
-                            0
-                        );
-
-                    buttons.forEach(
-                        function (button, index) {
-                            button.classList.toggle(
-                                'tm-rf-suggestion-active',
-                                index === activeSuggestionIndex
-                            );
-                        }
-                    );
-
-                    return;
-                }
-
-                if (event.key === 'Enter') {
-                    event.preventDefault();
-
-                    if (
-                        activeSuggestionIndex >= 0 &&
-                        currentSuggestions[
-                            activeSuggestionIndex
-                        ]
-                    ) {
-                        selectSuggestion(
-                            currentSuggestions[
-                                activeSuggestionIndex
-                            ]
-                        );
-                    } else {
-                        hideSuggestions();
-                        searchCity();
-                    }
-
-                    return;
-                }
-
-                if (event.key === 'Escape') {
-                    hideSuggestions();
-                }
-            }
-        );
-
-
-        input.addEventListener(
-            'blur',
-            function () {
-                setTimeout(
-                    hideSuggestions,
-                    150
-                );
             }
         );
 
@@ -5009,13 +4750,6 @@
     }
 
 
-    // API регистрируем ДО запуска инициализации.
-    // Это исключает гонку между общей панелью и модулем региона.
-    window.TM101RegionModule = {
-        createPanel,
-        isOrdersPage
-    };
-
     // =========================================================
     // ЗАПУСК
     // =========================================================
@@ -5036,6 +4770,1293 @@
 
         init();
 
+    }
+
+    // API для общей панели
+    window.TM101RegionModule = {
+        createPanel,
+        isOrdersPage
+    };
+
+})();
+
+/* =========================================================
+   ВСТРОЕННЫЙ МОДУЛЬ 3 — СРОКИ ПОДКЛЮЧЕНИЯ И ОГРАНИЧЕНИЯ
+   Кнопка рядом с блоком «Наши партнёры»
+   Google Sheets: автономное кеширование + обновление каждые 30 минут
+   ========================================================= */
+
+(function () {
+    'use strict';
+
+    const HOST = 'adviser-new.101internet.ru';
+    if (location.hostname !== HOST || !location.pathname.startsWith('/orders/')) return;
+
+    const SHEET_ID = '1MffGYG44j2_SMbdkepY57RJMpa4zLZ7IEXJGmSlgTeA';
+    const TERMS_GID = '0';
+    const RESTRICTIONS_GID = '584054075';
+    const TERMS_SHEET_NAME = 'Завалы монтажников';
+    const RESTRICTIONS_SHEET_NAME = 'Ограничения - для продаж';
+
+    const BUTTON_ID = 'tm101-partner-terms-button';
+    const MODAL_ID = 'tm101-partner-terms-modal';
+    const STYLE_ID = 'tm101-partner-terms-style';
+
+    const REFRESH_MS = 30 * 60 * 1000;
+    const CACHE_MAX_AGE_MS = REFRESH_MS;
+    const CACHE_TERMS = 'tm101-partner-terms-cache-v2';
+    const CACHE_RESTRICTIONS = 'tm101-partner-restrictions-cache-v2';
+
+    const PROVIDERS = {
+        'билайн': { key: 'билайн', name: 'Билайн', alias: 'билайн' },
+        'мтс': { key: 'мтс', name: 'МТС', alias: 'мтс' },
+        'мгтс': { key: 'мгтс', name: 'МГТС', alias: 'мгтс' },
+        'ростелеком': { key: 'ростелеком', name: 'Ростелеком', alias: 'ростелеком' },
+        'т2': { key: 'ростелеком', name: 't2 (Ростелеком)', alias: 'т2' },
+        't2': { key: 'ростелеком', name: 't2 (Ростелеком)', alias: 't2' },
+        'мегафон': { key: 'мегафон', name: 'МегаФон', alias: 'мегафон' },
+        'ттк': { key: 'ттк', name: 'ТТК', alias: 'ттк' },
+        'дом.ру': { key: 'дом.ру', name: 'Дом.ру', alias: 'дом.ру' },
+        'дом ру': { key: 'дом.ру', name: 'Дом.ру', alias: 'дом ру' },
+        'онлайм': { key: 'онлайм', name: 'Онлайм', alias: 'онлайм' },
+        'инетком': { key: 'инетком', name: 'Инетком', alias: 'инетком' },
+        'evo': { key: 'evo', name: 'EVO', alias: 'evo' }
+    };
+
+    let termsData = null;
+    let restrictionsData = null;
+    let refreshInProgress = false;
+    let refreshPromise = null;
+    let loadDiagnostics = { terms: null, restrictions: null, lastError: '' };
+
+    function norm(value) {
+        return String(value ?? '')
+            .replace(/\uFEFF/g, '')
+            .replace(/\u200B/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function key(value) {
+        return norm(value)
+            .toLowerCase()
+            .replace(/ё/g, 'е')
+            .replace(/[«»"']/g, '')
+            .replace(/\*/g, '')
+            .replace(/\s+/g, ' ');
+    }
+
+    function cacheSave(name, data) {
+        try {
+            localStorage.setItem(name, JSON.stringify({
+                savedAt: Date.now(),
+                data
+            }));
+        } catch (e) {}
+    }
+
+    function cacheLoad(name) {
+        try {
+            const raw = localStorage.getItem(name);
+            if (!raw) return null;
+            const obj = JSON.parse(raw);
+            return obj && obj.data ? obj.data : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function csvParse(csv) {
+        const rows = [];
+        let row = [];
+        let cell = '';
+        let quoted = false;
+
+        for (let i = 0; i < csv.length; i++) {
+            const ch = csv[i];
+
+            if (quoted) {
+                if (ch === '"') {
+                    if (csv[i + 1] === '"') {
+                        cell += '"';
+                        i++;
+                    } else {
+                        quoted = false;
+                    }
+                } else {
+                    cell += ch;
+                }
+                continue;
+            }
+
+            if (ch === '"') {
+                quoted = true;
+            } else if (ch === ',') {
+                row.push(cell);
+                cell = '';
+            } else if (ch === '\r') {
+                if (csv[i + 1] === '\n') i++;
+                row.push(cell);
+                rows.push(row);
+                row = [];
+                cell = '';
+            } else if (ch === '\n') {
+                row.push(cell);
+                rows.push(row);
+                row = [];
+                cell = '';
+            } else {
+                cell += ch;
+            }
+        }
+
+        if (cell !== '' || row.length) {
+            row.push(cell);
+            rows.push(row);
+        }
+
+        return rows;
+    }
+
+    function fetchCsv(gid) {
+        // 2.2.21: основной способ — GViz с ИМЕНЕМ ЛИСТА, а не только gid.
+        // Это обходит часть проблем с диапазонами/виртуальными представлениями Sheets.
+        // Запрашиваем всю используемую область A:I / A:M, затем сами находим заголовок.
+        const stamp = Date.now();
+        const isTerms = gid === TERMS_GID;
+        const sheetName = isTerms ? TERMS_SHEET_NAME : RESTRICTIONS_SHEET_NAME;
+        const range = isTerms ? 'A:AZ' : 'A:M';
+        const encodedSheet = encodeURIComponent(sheetName);
+        const encodedRange = encodeURIComponent(range);
+        const query = encodeURIComponent('select *');
+        const urls = [
+            `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?sheet=${encodedSheet}&range=${encodedRange}&tq=${query}&tqx=out:json&headers=0&_tm101=${stamp}`,
+            `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${encodeURIComponent(gid)}&range=${encodedRange}&tq=${query}&tqx=out:json&headers=0&_tm101=${stamp}`,
+            `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?sheet=${encodedSheet}&range=${encodedRange}&tqx=out:csv&headers=0&_tm101=${stamp}`,
+            `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${encodeURIComponent(gid)}&range=${encodedRange}&tqx=out:csv&headers=0&_tm101=${stamp}`,
+            `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${encodeURIComponent(gid)}&single=true&_tm101=${stamp}`
+        ];
+
+        return new Promise((resolve, reject) => {
+            const request = typeof GM_xmlhttpRequest === 'function'
+                ? GM_xmlhttpRequest
+                : (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function' ? GM.xmlHttpRequest : null);
+
+            if (!request) {
+                reject(new Error('GM_xmlhttpRequest недоступен.'));
+                return;
+            }
+
+            let index = 0;
+            const errors = [];
+            const startedAt = Date.now();
+
+            const next = () => {
+                if (index >= urls.length) {
+                    const message = `Google Sheets не вернул данные (${sheetName}): ${errors.join('; ')}`;
+                    loadDiagnostics[isTerms ? 'terms' : 'restrictions'] = {
+                        ok: false,
+                        sheetName,
+                        range,
+                        attempts: urls.length,
+                        errors: errors.slice(),
+                        ms: Date.now() - startedAt
+                    };
+                    reject(new Error(message));
+                    return;
+                }
+
+                const url = urls[index++];
+                const attempt = index;
+
+                request({
+                    method: 'GET',
+                    url,
+                    timeout: 30000,
+                    anonymous: false,
+                    nocache: true,
+
+                    onload: (response) => {
+                        const text = String(response.responseText || '');
+                        const status = Number(response.status || 0);
+                        const head = text.slice(0, 5000);
+                        const contentType = String(response.responseHeaders || '')
+                            .match(/content-type:\s*([^\\r\\n]+)/i)?.[1] || '';
+
+                        console.debug('[101Internet] Sheets response', {
+                            sheetName, gid, range, attempt, status,
+                            contentType,
+                            length: text.length,
+                            prefix: text.slice(0, 180)
+                        });
+
+                        if (!(status >= 200 && status < 300) || !text) {
+                            errors.push(`попытка ${attempt}: HTTP ${status || 0}, length=${text.length}`);
+                            next();
+                            return;
+                        }
+
+                        if (/accounts\.google\.com|ServiceLogin|<html[\\s>]|<!doctype html/i.test(head)) {
+                            errors.push(`попытка ${attempt}: получен HTML/страница авторизации`);
+                            next();
+                            return;
+                        }
+
+                        // GViz JSON wrapper.
+                        if (/google\.visualization\.Query\.setResponse\s*\(/.test(text)) {
+                            try {
+                                const match = text.match(/google\.visualization\.Query\.setResponse\s*\(([\\s\\S]*)\)\s*;?\s*$/);
+                                if (!match) throw new Error('GViz wrapper не найден');
+                                const payload = JSON.parse(match[1]);
+
+                                if (payload.status && payload.status !== 'ok') {
+                                    throw new Error(
+                                        payload.errors?.[0]?.detailed_message ||
+                                        payload.errors?.[0]?.message ||
+                                        payload.status
+                                    );
+                                }
+
+                                const table = payload.table;
+                                if (!table || !Array.isArray(table.rows)) throw new Error('GViz table отсутствует');
+
+                                const width = Math.max(
+                                    Array.isArray(table.cols) ? table.cols.length : 0,
+                                    ...table.rows.map(r => Array.isArray(r?.c) ? r.c.length : 0),
+                                    isTerms ? 9 : 13
+                                );
+
+                                const rows = table.rows.map(r => {
+                                    const out = new Array(width).fill('');
+                                    (r.c || []).forEach((cell, i) => {
+                                        if (cell == null) return;
+                                        out[i] = cell.f != null ? String(cell.f) : (cell.v != null ? String(cell.v) : '');
+                                    });
+                                    return out;
+                                });
+
+                                if (!rows.length) throw new Error('GViz вернул 0 строк');
+
+                                const csv = rows.map(row => row.map(value => {
+                                    const v = String(value ?? '');
+                                    return /[",\\n\\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+                                }).join(',')).join('\\n');
+
+                                if (!csv.trim()) throw new Error('GViz вернул пустую таблицу');
+
+                                loadDiagnostics[isTerms ? 'terms' : 'restrictions'] = {
+                                    ok: true,
+                                    source: `GViz sheet=${sheetName}`,
+                                    sheetName,
+                                    gid,
+                                    range,
+                                    rows: rows.length,
+                                    columns: width,
+                                    header: rows[0] || [],
+                                    sample: rows.slice(0, 4),
+                                    attempt,
+                                    ms: Date.now() - startedAt
+                                };
+
+                                console.debug('[101Internet] Google Sheets GViz parsed', loadDiagnostics[isTerms ? 'terms' : 'restrictions']);
+                                resolve(csv);
+                                return;
+                            } catch (e) {
+                                errors.push(`попытка ${attempt}: GViz ${e?.message || e}`);
+                                next();
+                                return;
+                            }
+                        }
+
+                        // CSV fallback.
+                        if (!/<html|<!doctype/i.test(text) && (text.includes('\n') || text.includes('\r'))) {
+                            loadDiagnostics[isTerms ? 'terms' : 'restrictions'] = {
+                                ok: true,
+                                source: `CSV sheet=${sheetName}`,
+                                sheetName,
+                                gid,
+                                range,
+                                rows: csvParse(text).length,
+                                columns: Math.max(0, ...csvParse(text).map(r => r.length)),
+                                header: csvParse(text)[0] || [],
+                                attempt,
+                                ms: Date.now() - startedAt
+                            };
+                            console.debug('[101Internet] Google Sheets CSV parsed', loadDiagnostics[isTerms ? 'terms' : 'restrictions']);
+                            resolve(text);
+                            return;
+                        }
+
+                        errors.push(`попытка ${attempt}: неизвестный формат ответа`);
+                        next();
+                    },
+                    onerror: () => {
+                        errors.push(`попытка ${attempt}: сетевая ошибка`);
+                        next();
+                    },
+                    ontimeout: () => {
+                        errors.push(`попытка ${attempt}: таймаут`);
+                        next();
+                    }
+                });
+            };
+
+            next();
+        });
+    }
+
+    function parseDaysValue(value) {
+        const raw = norm(value);
+        if (!raw) return null;
+
+        // В таблице сроки могут приходить как число, число с запятой,
+        // либо как текст вроде "1 день", "7 дней". Берём только
+        // однозначное значение срока и не принимаем диапазоны/служебные тексты.
+        const compact = raw.replace(/\u00a0/g, ' ').replace(/,/g, '.');
+        const stale = /^#\s*\d+(?:[.,]\d+)?\s*#$/i.test(compact);
+        const clean = stale ? compact.replace(/^#|#$/g, '').trim() : compact;
+
+        if (/^\d+(?:\.\d+)?$/.test(clean)) return { days: clean, stale };
+
+        const m = clean.match(/^(\d+(?:\.\d+)?)\s*(?:дн(?:я|ей)?|день|дней|сут(?:ки|ок)?)$/i);
+        if (m) return { days: m[1], stale };
+
+        return null;
+    }
+
+    function isValidDays(value) {
+        return parseDaysValue(value) !== null;
+    }
+
+    function parseTerms(csv) {
+        const rows = csvParse(csv);
+        if (!rows.length) throw new Error('Лист сроков пустой');
+
+        // 2.2.23: Google Sheets использует объединённые/групповые заголовки.
+        // В CSV один провайдер может повторяться в нескольких колонках:
+        // Билайн | Билайн | Билайн | пусто | МТС | МТС | МТС | ...
+        // Поэтому нельзя брать только последнее совпадение колонки.
+        const providerNames = ['билайн', 'мтс', 'мгтс', 'ростелеком', 'мегафон', 'ттк', 'дом.ру', 'онлайм', 'инетком'];
+        let headerIndex = rows.findIndex(row => {
+            const cells = row.map(key);
+            const hits = providerNames.filter(name => cells.some(v => v === name || v.includes(name)));
+            return hits.length >= 2;
+        });
+        if (headerIndex < 0) {
+            headerIndex = rows.findIndex(row => row.some(v => key(v) === 'регионы/провайдеры'));
+        }
+        if (headerIndex < 0) {
+            throw new Error('Не найдена строка заголовков провайдеров. Первые строки: ' + JSON.stringify(rows.slice(0, 10)));
+        }
+
+        const header = rows[headerIndex] || [];
+        const regionColumn = header.findIndex(v => key(v) === 'регионы/провайдеры');
+        const actualRegionColumn = regionColumn >= 0 ? regionColumn : 0;
+
+        // Все колонки, относящиеся к каждому провайдеру.
+        // Это важно для групповых/объединённых заголовков.
+        const providerColumns = {};
+        for (const provider of providerNames) {
+            providerColumns[provider] = [];
+        }
+
+        // 1) Прямые совпадения в строке заголовков.
+        header.forEach((value, index) => {
+            const k = key(value);
+            if (!k) return;
+            for (const provider of providerNames) {
+                if (k === provider || k.includes(provider) || provider.includes(k)) {
+                    providerColumns[provider].push(index);
+                }
+            }
+        });
+
+        // 2) В некоторых экспортированных представлениях Google объединённая
+        // ячейка может присутствовать только в первой колонке группы. Тогда
+        // расширяем группу до следующего явного заголовка провайдера/конца таблицы.
+        for (let i = 0; i < header.length; i++) {
+            const k = key(header[i]);
+            if (!k) continue;
+            const provider = providerNames.find(name => k === name || k.includes(name));
+            if (!provider) continue;
+            let j = i + 1;
+            while (j < header.length && !key(header[j])) j++;
+            // Пустые колонки между группами не включаем. Повторяющиеся
+            // заголовки уже попали в providerColumns выше.
+            if (j > i + 1) {
+                for (let c = i; c < j; c++) {
+                    if (!providerColumns[provider].includes(c) && key(header[c]) === provider) {
+                        providerColumns[provider].push(c);
+                    }
+                }
+            }
+        }
+
+        // Убираем дубли и сортируем.
+        Object.keys(providerColumns).forEach(pk => {
+            providerColumns[pk] = [...new Set(providerColumns[pk])].sort((a, b) => a - b);
+        });
+
+        // 2.2.23: В таблице фактическая структура группы шире заголовков.
+        // Например: Билайн занимает B:E, где B/C/D — дата/ответственный/
+        // дата обновления, а E — срок подключения. При этом E имеет пустой
+        // заголовок. Аналогично МТС занимает F:I, Ростелеком N:Q и т.д.
+        // Поэтому после определения первых колонок групп достраиваем каждую
+        // группу до колонки перед следующим провайдером. Это позволяет брать
+        // срок из последней (пустой в строке заголовка) колонки группы.
+        const providerStarts = Object.entries(providerColumns)
+            .filter(([, indices]) => indices.length)
+            .map(([pk, indices]) => ({ pk, start: Math.min(...indices) }))
+            .sort((a, b) => a.start - b.start);
+
+        for (let i = 0; i < providerStarts.length; i++) {
+            const current = providerStarts[i];
+            const nextStart = providerStarts[i + 1]?.start ?? Math.min(header.length, 34);
+            const end = Math.max(current.start, nextStart - 1);
+            const expanded = [];
+            for (let c = current.start; c <= end; c++) expanded.push(c);
+            providerColumns[current.pk] = expanded;
+        }
+
+        const data = {};
+        let numericCells = 0;
+        let validPlaceRows = 0;
+
+        for (let r = headerIndex + 1; r < rows.length; r++) {
+            const row = rows[r] || [];
+            const place = norm(row[actualRegionColumn]);
+            if (!place || /^#\d+#$/i.test(place)) continue;
+
+            validPlaceRows++;
+            const placeKey = key(place);
+            if (!data[placeKey]) data[placeKey] = { label: place, providers: {} };
+
+            Object.entries(providerColumns).forEach(([providerKey, indices]) => {
+                if (!indices.length) return;
+
+                // Внутри группы может быть несколько значений. Берём первое
+                // корректное число, а не последнее совпадение заголовка.
+                for (const idx of indices) {
+                    const value = norm(row[idx]);
+                    const parsed = parseDaysValue(value);
+                    if (parsed !== null) {
+                        data[placeKey].providers[providerKey] = parsed;
+                        numericCells++;
+                        break;
+                    }
+                }
+            });
+        }
+
+        const providerCounts = {};
+        Object.keys(providerColumns).forEach(pk => {
+            providerCounts[pk] = Object.values(data).filter(item => item.providers?.[pk] != null).length;
+        });
+
+        const diag = loadDiagnostics.terms || {};
+        loadDiagnostics.terms = {
+            ...diag,
+            parsed: true,
+            headerIndex,
+            header,
+            regionColumn: actualRegionColumn,
+            providerColumns,
+            places: Object.keys(data).length,
+            validPlaceRows,
+            numericCells,
+            providerCounts,
+            samplePlaces: Object.values(data).slice(0, 5).map(x => ({ label: x.label, providers: x.providers })),
+            astrahan: data[key('Астрахань')] || null,
+            balashikha: data[key('Балашиха')] || null,
+            rawRows: ['Астрахань', 'Балашиха'].map(name => {
+                const target = key(name);
+                const rr = rows.find(row => key(row[actualRegionColumn]) === target);
+                return rr ? { label: name, cells: rr.slice(0, Math.max(header.length, 33)).map((v, i) => ({ col: i, value: norm(v) })).filter(x => x.value !== '') } : { label: name, missing: true };
+            })
+        };
+
+        console.debug('[101Internet] Сроки разобраны 2.2.23:', loadDiagnostics.terms);
+
+        return { header, data, loadedAt: Date.now() };
+    }
+
+    function parseRestrictions(csv) {
+        const rows = csvParse(csv);
+        const result = {
+            rost: [],
+            rostNoSale: [],
+            mts: [],
+            loadedAt: Date.now()
+        };
+
+        // A:E — Ростелеком
+        for (let r = 0; r < rows.length; r++) {
+            const row = rows[r] || [];
+            const a = norm(row[0]);
+            const b = norm(row[1]);
+            const c = norm(row[2]);
+            const d = norm(row[3]);
+            const e = norm(row[4]);
+
+            if (!a && !b && !c && !d && !e) continue;
+
+            const all = key([a, b, c, d, e].join(' '));
+            if (
+                all.includes('ростелеком') ||
+                all.includes('очередь') ||
+                all.includes('филиал')
+            ) {
+                if (key(a) === 'ростелеком мо' ||
+                    key(a) === 'ростелеком юг' ||
+                    key(a) === 'ростелеком центр' ||
+                    key(a).startsWith('ростелеком ')) {
+                    result.rost.push({ provider: a, region: b, queue: c, noTs: d, alternative: e });
+                }
+                continue;
+            }
+
+            if (b && (c || d || e) && /область|край|москва|казань|омск|петербург|татарстан|филиал|округ/i.test(b + ' ' + a)) {
+                result.rost.push({ provider: a, region: b, queue: c, noTs: d, alternative: e });
+            }
+        }
+
+        // F:I — территории, где Ростелеком вообще не продавать
+        for (let r = 0; r < rows.length; r++) {
+            const row = rows[r] || [];
+            const f = norm(row[5]);
+            const g = norm(row[6]);
+            const h = norm(row[7]);
+            const i = norm(row[8]);
+            const joined = key([f, g, h, i].join(' '));
+
+            if (!joined || joined.includes('графика нет') || joined.includes('террит')) continue;
+
+            if (f || g || h || i) {
+                result.rostNoSale.push({ a: f, b: g, c: h, d: i });
+            }
+        }
+
+        // K:M — МТС региональные ограничения
+        for (let r = 0; r < rows.length; r++) {
+            const row = rows[r] || [];
+            const k = norm(row[10]);
+            const l = norm(row[11]);
+            const m = norm(row[12]);
+            const joined = key([k, l, m].join(' '));
+
+            if (!joined || joined.includes('мрф') || joined.includes('альтернатива')) continue;
+
+            if (k || l || m) {
+                result.mts.push({ mrf: k, region: l, alternative: m });
+            }
+        }
+
+        return result;
+    }
+
+    function findAddressCard(title) {
+        const headings = Array.from(document.querySelectorAll('h6'));
+        const heading = headings.find(el => norm(el.textContent) === title);
+        if (!heading) return null;
+
+        // В текущем Adviser эти блоки могут быть не MuiPaper, а обычным
+        // MuiGrid-container. Сначала пробуем Paper, затем сам внешний Grid.
+        return heading.closest('.MuiPaper-root')
+            || heading.closest('.MuiGrid-container')
+            || heading.parentElement
+            || null;
+    }
+
+    function readCardField(card, labels) {
+        if (!card) return '';
+        const wanted = labels.map(key);
+
+        const labelNodes = card.querySelectorAll('label, legend, legend span, [class*="MuiInputLabel"]');
+        for (const label of labelNodes) {
+            if (!wanted.includes(key(label.textContent))) continue;
+
+            const forId = label.getAttribute('for');
+            if (forId) {
+                const input = document.getElementById(forId);
+                if (input && card.contains(input) && norm(input.value)) return norm(input.value);
+            }
+
+            const control = label.closest('.MuiFormControl-root') || label.parentElement;
+            const input = control?.querySelector('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+            if (input && norm(input.value)) return norm(input.value);
+        }
+
+        return '';
+    }
+
+    function getAddressContext(type) {
+        const title = type === 'check' ? 'Проверочный поиск' : 'Основной адрес';
+        const card = findAddressCard(title);
+        if (!card) return { type, title, card: null, region: '', city: '', district: '', places: [] };
+
+        let region = readCardField(card, ['Регион']);
+        let city = readCardField(card, ['Населённый пункт', 'Населенный пункт', 'Город']);
+        let district = readCardField(card, ['Район']);
+
+        // Надёжный fallback для текущей MUI-разметки: первые два combobox/input.
+        // В основном адресе это Регион + Район, в проверочном поиске — Регион + Населённый пункт.
+        const inputs = Array.from(card.querySelectorAll('input[role="combobox"]'));
+        if (!region && inputs[0]?.value) region = norm(inputs[0].value);
+        if (type === 'check') {
+            if (!city && inputs[1]?.value) city = norm(inputs[1].value);
+        } else {
+            if (!district && inputs[1]?.value) district = norm(inputs[1].value);
+        }
+
+        const places = [];
+        const add = v => {
+            if (v && !places.some(x => key(x) === key(v))) places.push(v);
+        };
+
+        if (type === 'check') {
+            add(city);
+            add(region);
+        } else {
+            add(region);
+            add(district);
+        }
+
+        return { type, title, card, region, city, district, places };
+    }
+
+    function getAddressPlaces() {
+        const check = getAddressContext('check');
+        const main = getAddressContext('main');
+        const values = [];
+        [...check.places, ...main.places].forEach(v => {
+            if (v && !values.some(x => key(x) === key(v))) values.push(v);
+        });
+        return values;
+    }
+
+    function resolvePlaceFromCandidates(candidates) {
+        if (!termsData?.data) return null;
+        const exact = candidates.find(v => termsData.data[key(v)]);
+        if (exact) return termsData.data[key(exact)];
+
+        for (const candidate of candidates) {
+            const ck = key(candidate);
+            const matches = Object.values(termsData.data).filter(item => {
+                const ik = key(item.label);
+                return ik === ck || ik.includes(ck) || ck.includes(ik);
+            });
+            if (matches.length === 1) return matches[0];
+        }
+        return null;
+    }
+
+    function resolvePlace() {
+        return resolvePlaceFromCandidates(getAddressPlaces());
+    }
+
+    function restrictionMatch(text, target) {
+        const a = key(text);
+        const b = key(target);
+        if (!a || !b) return false;
+        return a === b || a.includes(b) || b.includes(a);
+    }
+
+    function findRestrictions(providerKey, addressPlaces = getAddressPlaces()) {
+        if (!restrictionsData) return [];
+        if (providerKey !== 'ростелеком' && providerKey !== 'мтс') return [];
+
+        const places = addressPlaces || getAddressPlaces();
+        const result = [];
+
+        if (providerKey === 'ростелеком') {
+            for (const item of restrictionsData.rost || []) {
+                if (places.some(p => restrictionMatch(item.region, p))) {
+                    result.push({
+                        type: 'Ростелеком',
+                        text: [
+                            item.queue ? `Очередь: ${item.queue}` : '',
+                            item.noTs ? `Нет ТС: ${item.noTs}` : '',
+                            item.alternative ? `Альтернатива: ${item.alternative}` : ''
+                        ].filter(Boolean).join(' · ')
+                    });
+                }
+            }
+
+            for (const item of restrictionsData.rostNoSale || []) {
+                const text = [item.a, item.b, item.c, item.d].filter(Boolean).join(' ');
+                if (places.some(p => restrictionMatch(text, p))) {
+                    result.push({
+                        type: 'Ограничение продажи',
+                        text: 'Ростелеком по этой территории не продавать'
+                    });
+                }
+            }
+        }
+
+        if (providerKey === 'мтс') {
+            for (const item of restrictionsData.mts || []) {
+                if (places.some(p => restrictionMatch(item.region, p))) {
+                    result.push({
+                        type: 'МТС',
+                        text: item.alternative
+                            ? `Длительное ожидание · Альтернатива: ${item.alternative}`
+                            : 'Длительное ожидание'
+                    });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    function providerInfo(label) {
+        const clean = key(label)
+            .replace(/[^a-zа-я0-9.]+/gi, ' ')
+            .trim();
+
+        // Сначала точное совпадение, затем поиск названия внутри текста.
+        for (const alias of Object.keys(PROVIDERS)) {
+            if (clean === key(alias)) return PROVIDERS[alias];
+        }
+
+        for (const alias of Object.keys(PROVIDERS)) {
+            const a = key(alias);
+            if (a && clean.includes(a)) return PROVIDERS[alias];
+        }
+
+        return null;
+    }
+
+    function addStyles() {
+        if (document.getElementById(STYLE_ID)) return;
+
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = `
+            #${BUTTON_ID} {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                margin-left: 8px;
+                padding: 3px 8px;
+                min-width: 28px;
+                height: 26px;
+                border: 1px solid #1976d2;
+                border-radius: 6px;
+                background: #fff;
+                color: #1976d2;
+                cursor: pointer;
+                font-size: 15px;
+                line-height: 1;
+                vertical-align: middle;
+                box-sizing: border-box;
+                box-shadow: 0 1px 3px rgba(0,0,0,.12);
+            }
+
+            #${BUTTON_ID}:hover {
+                background: #eaf3ff;
+            }
+
+            #${BUTTON_ID}.loading {
+                opacity: .65;
+                pointer-events: none;
+            }
+
+            #${MODAL_ID} {
+                position: fixed;
+                inset: 0;
+                z-index: 2147483647;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+                background: rgba(0,0,0,.35);
+                box-sizing: border-box;
+            }
+
+            #${MODAL_ID} .tm101-pt-window {
+                width: 560px;
+                max-width: 95vw;
+                max-height: 85vh;
+                overflow: auto;
+                background: #fff;
+                border-radius: 12px;
+                box-shadow: 0 15px 50px rgba(0,0,0,.3);
+                font-family: Arial, sans-serif;
+                color: #202124;
+            }
+
+            #${MODAL_ID} .tm101-pt-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 13px 16px;
+                border-bottom: 1px solid #e4e7eb;
+                font-size: 15px;
+                font-weight: 700;
+            }
+
+            #${MODAL_ID} .tm101-pt-close {
+                border: 0;
+                background: transparent;
+                font-size: 22px;
+                cursor: pointer;
+                color: #555;
+                line-height: 1;
+            }
+
+            #${MODAL_ID} .tm101-pt-section {
+                margin: 0 0 10px;
+                border: 1px solid #dfe3e8;
+                border-radius: 8px;
+                overflow: hidden;
+            }
+
+            #${MODAL_ID} .tm101-pt-section-title {
+                padding: 10px 12px;
+                font-weight: 700;
+                font-size: 13px;
+            }
+
+            #${MODAL_ID} .tm101-pt-table-place {
+                color: #6b737c;
+                font-size: 11px;
+            }
+
+            #${MODAL_ID} .tm101-pt-body {
+                padding: 14px 16px 16px;
+            }
+
+            #${MODAL_ID} .tm101-pt-address {
+                margin-bottom: 12px;
+                padding: 9px 10px;
+                border-radius: 8px;
+                background: #f5f7fa;
+                font-size: 12px;
+                color: #5f6368;
+            }
+
+            #${MODAL_ID} .tm101-pt-row {
+                display: grid;
+                grid-template-columns: 145px 1fr;
+                gap: 12px;
+                padding: 10px 0;
+                border-bottom: 1px solid #edf0f2;
+            }
+
+            #${MODAL_ID} .tm101-pt-row:last-child {
+                border-bottom: 0;
+            }
+
+            #${MODAL_ID} .tm101-pt-provider {
+                font-weight: 700;
+                font-size: 13px;
+            }
+
+            #${MODAL_ID} .tm101-pt-value {
+                font-size: 13px;
+                line-height: 1.45;
+            }
+
+            #${MODAL_ID} .tm101-pt-days {
+                font-weight: 700;
+            }
+
+            #${MODAL_ID} .tm101-pt-muted {
+                color: #777;
+            }
+
+            #${MODAL_ID} .tm101-pt-warning {
+                margin-top: 5px;
+                padding: 6px 8px;
+                border-radius: 6px;
+                background: #fff4e5;
+                color: #8a4b00;
+                font-size: 12px;
+            }
+
+            #${MODAL_ID} .tm101-pt-footer {
+                padding-top: 10px;
+                color: #777;
+                font-size: 11px;
+            }
+
+            #${MODAL_ID} .tm101-pt-footer details { margin-top: 4px; }
+            #${MODAL_ID} .tm101-pt-footer summary { cursor: pointer; color: #555; font-weight: 600; }
+            #${MODAL_ID} .tm101-pt-debug { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; margin: 8px 0 0; padding: 8px; background: #f5f7fa; border-radius: 6px; font: 10px/1.35 Consolas, monospace; color: #333; }
+
+            @media (max-width: 600px) {
+                #${MODAL_ID} .tm101-pt-row {
+                    grid-template-columns: 1fr;
+                    gap: 4px;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function getTitleElement() {
+        const elements = document.querySelectorAll('div, span, p, label');
+        for (const el of elements) {
+            if (norm(el.textContent) === 'Наши партнёры' && el.children.length === 0) {
+                return el;
+            }
+        }
+
+        for (const el of elements) {
+            if (norm(el.textContent) === 'Наши партнёры') return el;
+        }
+
+        return null;
+    }
+
+    function closeModal() {
+        const modal = document.getElementById(MODAL_ID);
+        if (modal) modal.remove();
+    }
+
+    async function openModal() {
+        closeModal();
+
+        const mainCard = findAddressCard('Основной адрес');
+        const checkCard = findAddressCard('Проверочный поиск');
+        // Партнёров ищем непосредственно по заголовку адресного блока.
+        // Не зависим от того, какой контейнер MUI вернул findAddressCard().
+        const mainPartners = findPartnersForAddressTitle('Основной адрес');
+        const checkPartners = findPartnersForAddressTitle('Проверочный поиск');
+        console.debug('[TM101 PartnerTerms]', {
+            mainCard: !!mainCard,
+            checkCard: !!checkCard,
+            mainPartners: mainPartners.map(p => p.name),
+            checkPartners: checkPartners.map(p => p.name)
+        });
+        const mainAddress = getAddressContext('main');
+        const checkAddress = getAddressContext('check');
+
+        const buildSection = (title, address, providers) => {
+            const place = resolvePlaceFromCandidates(address.places);
+            const addressText = [
+                address.city ? `Населённый пункт: ${address.city}` : '',
+                address.region ? `Регион: ${address.region}` : '',
+                address.district ? `Район: ${address.district}` : ''
+            ].filter(Boolean).join(' · ');
+
+            const rows = providers.map(provider => {
+                const rawTerm = place?.providers?.[provider.key] || null;
+                const term = typeof rawTerm === 'object' && rawTerm !== null
+                    ? String(rawTerm.days ?? '')
+                    : String(rawTerm || '');
+                const stale = typeof rawTerm === 'object' && rawTerm !== null ? !!rawTerm.stale : false;
+                const restrictions = findRestrictions(provider.key, address.places);
+                let valueHtml = term
+                    ? `<span class="tm101-pt-days${stale ? ' tm101-pt-stale' : ''}">${escapeHtml(term)} ${Number(term) === 1 ? 'день' : Number(term) >= 2 && Number(term) <= 4 ? 'дня' : 'дней'}${stale ? ' <span class="tm101-pt-stale-note">(информация старше 7 дней)</span>' : ''}</span>`
+                    : `<span class="tm101-pt-muted">нет данных</span>`;
+
+                if (restrictions.length) {
+                    valueHtml += restrictions.map(r => `<div class="tm101-pt-warning">⚠ ${escapeHtml(r.type)}: ${escapeHtml(r.text)}</div>`).join('');
+                }
+
+                return `<div class="tm101-pt-row"><div class="tm101-pt-provider">${escapeHtml(provider.displayName || provider.name)}</div><div class="tm101-pt-value">${valueHtml}</div></div>`;
+            }).join('');
+
+            return `<div class="tm101-pt-section"><div class="tm101-pt-section-title">${escapeHtml(title)}</div><div class="tm101-pt-address">${escapeHtml(addressText || 'Адрес не определён')}${place ? `<br><span class="tm101-pt-table-place">Строка таблицы: ${escapeHtml(place.label)}</span>` : ''}</div>${rows || '<div class="tm101-pt-muted">Партнёры не найдены.</div>'}</div>`;
+        };
+
+        const modal = document.createElement('div');
+        modal.id = MODAL_ID;
+        modal.innerHTML = `<div class="tm101-pt-window" role="dialog" aria-modal="true"><div class="tm101-pt-head"><span>⏱ Сроки подключения и ограничения</span><button type="button" class="tm101-pt-close" aria-label="Закрыть">×</button></div><div class="tm101-pt-body">${buildSection('Основной адрес', mainAddress, mainPartners)}${buildSection('Проверочный поиск', checkAddress, checkPartners)}<div class="tm101-pt-footer">Сроки берутся из листа «Завалы монтажников», ограничения — из листа «Ограничения - для продаж». Данные автоматически обновляются каждые 30 минут. Окно открывается из локального кеша без ожидания загрузки.<br><br><details><summary>Диагностика загрузки</summary><pre class="tm101-pt-debug">${escapeHtml(JSON.stringify(loadDiagnostics, null, 2))}</pre></details></div></div></div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('.tm101-pt-close').addEventListener('click', closeModal);
+        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    }
+
+    function extractPartnerItemsFromTitle(partnerTitle) {
+        const providers = [];
+        const seen = new Set();
+        if (!partnerTitle) return providers;
+
+        const addProvider = rawText => {
+            const text = norm(rawText);
+            if (!text) return;
+            const normalized = key(text);
+            if (!normalized || normalized === 'наши партнеры') return;
+
+            // Провайдеры определяются ТОЛЬКО по тексту элементов <p>.
+            // Класс MUI может меняться (css-..., MuiTypography-...), поэтому
+            // на него не опираемся.
+            const known = providerInfo(text);
+
+            // ВАЖНО: оператор берётся из блока «Наши партнёры» независимо
+            // от наличия этого оператора в Google Таблице и PROVIDERS.
+            // Если оператора нет в таблице — он всё равно показывается,
+            // а срок подключения отображается как «нет данных».
+            const provider = known || {
+                key: `unknown:${normalized}`,
+                name: text,
+                alias: text
+            };
+
+            const identity = provider.key;
+            if (seen.has(identity)) return;
+            seen.add(identity);
+            providers.push({ ...provider, displayName: text });
+        };
+
+        // 1. Новый/основной вариант: рядом с «Наши партнёры» есть отдельный
+        // контейнер, внутри которого провайдеры представлены обычными <p>:
+        // <div ...>
+        //   <p> EО </p><p>t2</p><p>МегаФон</p><p>Ростелеком</p>
+        // </div>
+        // Классы контейнера и самих <p> намеренно игнорируем.
+        let ancestor = partnerTitle.parentElement;
+        for (let level = 0; ancestor && level < 8; level++, ancestor = ancestor.parentElement) {
+            const candidates = [];
+            let node = ancestor;
+
+            // Проверяем соседние элементы на каждом уровне вложенности.
+            while (node && node.parentElement === ancestor) {
+                if (node !== partnerTitle && node.querySelectorAll) {
+                    const ps = Array.from(node.querySelectorAll('p'));
+                    if (ps.length) {
+                        ps.forEach(p => {
+                            if (p.children.length === 0) addProvider(p.textContent);
+                        });
+                        if (providers.length) break;
+                    }
+                }
+                node = node.nextElementSibling;
+            }
+            if (providers.length) return providers;
+        }
+
+        // 2. Ищем непосредственно следующий контейнер после элемента
+        // «Наши партнёры» и берём из него ВСЕ текстовые <p>, независимо от
+        // MUI-классов/кода CSS.
+        let sibling = partnerTitle.nextElementSibling;
+        for (let i = 0; sibling && i < 4; i++, sibling = sibling.nextElementSibling) {
+            Array.from(sibling.querySelectorAll?.('p') || []).forEach(p => {
+                if (p.children.length === 0) addProvider(p.textContent);
+            });
+            if (providers.length) return providers;
+        }
+
+        // 3. Расширенный fallback: весь DOM после «Наши партнёры» внутри
+        // текущего адресного блока. Берём только <p>, распознаваемые как
+        // провайдеры, поэтому любые изменения классов/вложенности MUI не
+        // влияют на поиск.
+        const headings = Array.from(document.querySelectorAll('h6'));
+        const addressHeading = headings.find(h => {
+            const pos = h.compareDocumentPosition(partnerTitle);
+            return (pos & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                (norm(h.textContent) === 'Основной адрес' || norm(h.textContent) === 'Проверочный поиск');
+        });
+
+        if (addressHeading) {
+            let afterTitle = false;
+            for (const p of Array.from(document.querySelectorAll('p'))) {
+                if (p === partnerTitle) {
+                    afterTitle = true;
+                    continue;
+                }
+                if (!afterTitle) continue;
+
+                // Не переходим в следующий адресный блок.
+                const nearestH6 = p.closest('div')?.querySelector('h6');
+                if (nearestH6 && nearestH6 !== addressHeading &&
+                    (norm(nearestH6.textContent) === 'Основной адрес' || norm(nearestH6.textContent) === 'Проверочный поиск')) {
+                    break;
+                }
+
+                if (p.children.length === 0) addProvider(p.textContent);
+            }
+        }
+
+        return providers;
+    }
+
+    function findPartnersForAddressTitle(addressTitle) {
+        // Не пытаемся определить карточку через MuiPaper/MuiGrid.
+        // Ищем заголовок адресного блока, затем ближайший p «Наши партнёры»
+        // в его логическом блоке. Это устраняет зависимость от классов MUI.
+        const headings = Array.from(document.querySelectorAll('h6'));
+        const heading = headings.find(h => norm(h.textContent) === addressTitle);
+        if (!heading) {
+            console.warn('[101Internet] Не найден заголовок адреса:', addressTitle);
+            return [];
+        }
+
+        // Сначала ищем p «Наши партнёры» среди элементов после h6 до
+        // следующего h6. У текущего Adviser это ровно нужный блок.
+        const allP = Array.from(document.querySelectorAll('p'));
+        const headingIndex = Array.from(document.querySelectorAll('h6')).indexOf(heading);
+        const nextHeading = headings[headingIndex + 1] || null;
+        const nextHeadingIndex = nextHeading ? allP.findIndex(p => {
+            const parentHeading = p.closest('div')?.querySelector('h6');
+            return parentHeading === nextHeading;
+        }) : -1;
+
+        let started = false;
+        for (const p of allP) {
+            if (!started) {
+                // После h6 в DOM-порядке.
+                const pos = heading.compareDocumentPosition(p);
+                if (!(pos & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                started = true;
+            }
+            if (nextHeading && nextHeading.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                break;
+            }
+            if (key(p.textContent) === 'наши партнеры') {
+                const result = extractPartnerItemsFromTitle(p);
+                console.log('[101Internet] Партнёры для', addressTitle, result.map(x => x.name));
+                return result;
+            }
+        }
+
+        // Надёжный fallback: ближайший «Наши партнёры» после h6.
+        for (const p of allP) {
+            if (key(p.textContent) !== 'наши партнеры') continue;
+            const pos = heading.compareDocumentPosition(p);
+            if (pos & Node.DOCUMENT_POSITION_FOLLOWING) {
+                const result = extractPartnerItemsFromTitle(p);
+                console.log('[101Internet] Партнёры fallback для', addressTitle, result.map(x => x.name));
+                return result;
+            }
+        }
+
+        console.warn('[101Internet] Не найден блок «Наши партнёры» для', addressTitle);
+        return [];
+    }
+
+    // Оставляем совместимость со старыми вызовами модуля.
+    function findPartnersInCard(card) {
+        if (!card) return [];
+        const title = Array.from(card.querySelectorAll('p')).find(p => key(p.textContent) === 'наши партнеры');
+        return extractPartnerItemsFromTitle(title);
+    }
+
+    function cacheLoadWithMeta(name) {
+        try {
+            const raw = localStorage.getItem(name);
+            if (!raw) return null;
+            const obj = JSON.parse(raw);
+            if (!obj || !obj.data) return null;
+            return { data: obj.data, savedAt: Number(obj.savedAt || 0) };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function loadCachedData() {
+        const terms = cacheLoadWithMeta(CACHE_TERMS);
+        const restrictions = cacheLoadWithMeta(CACHE_RESTRICTIONS);
+        if (terms?.data) termsData = terms.data;
+        if (restrictions?.data) restrictionsData = restrictions.data;
+        const savedAt = Math.min(terms?.savedAt || 0, restrictions?.savedAt || 0);
+        return {
+            available: !!(termsData && restrictionsData),
+            savedAt,
+            fresh: savedAt > 0 && (Date.now() - savedAt) < CACHE_MAX_AGE_MS
+        };
+    }
+
+    function refreshData(force = false) {
+        if (refreshPromise) return refreshPromise;
+
+        refreshInProgress = true;
+        refreshPromise = (async () => {
+            try {
+                const [termsCsv, restrictionsCsv] = await Promise.all([
+                    fetchCsv(TERMS_GID),
+                    fetchCsv(RESTRICTIONS_GID)
+                ]);
+
+                termsData = parseTerms(termsCsv);
+                restrictionsData = parseRestrictions(restrictionsCsv);
+
+                cacheSave(CACHE_TERMS, termsData);
+                cacheSave(CACHE_RESTRICTIONS, restrictionsData);
+                loadDiagnostics.cacheUpdatedAt = new Date().toISOString();
+                loadDiagnostics.lastError = '';
+                return true;
+            } catch (error) {
+                console.warn('[101Internet] Не удалось обновить сроки из Google Sheets:', error);
+                loadDiagnostics.lastError = String(error?.message || error);
+                // Фоновое обновление никогда не ломает рабочие данные: оставляем
+                // последний успешно сохранённый кеш.
+                if (!termsData || !restrictionsData) loadCachedData();
+                if (force && (!termsData || !restrictionsData)) throw error;
+                return false;
+            } finally {
+                refreshInProgress = false;
+                refreshPromise = null;
+            }
+        })();
+
+        return refreshPromise;
+    }
+
+    function startAutoRefresh() {
+        // Сначала мгновенно поднимаем последний кеш. Это не ждёт Google Sheets.
+        const cache = loadCachedData();
+
+        // Если кеша ещё нет — один раз загружаем данные в фоне.
+        if (!cache.available) {
+            refreshData(false).catch(() => {});
+        } else if (!cache.fresh) {
+            // Старый кеш сразу используется интерфейсом, а обновление идёт в фоне.
+            refreshData(false).catch(() => {});
+        }
+
+        // Далее обновляем данные каждые 30 минут без участия пользователя.
+        setInterval(() => {
+            refreshData(false).catch(() => {});
+        }, REFRESH_MS);
+    }
+
+    async function openPartnerTerms() {
+        // Главное: окно открывается из локального кеша практически мгновенно.
+        // Google Sheets никогда не блокирует открытие, если есть сохранённые данные.
+        const cache = loadCachedData();
+
+        if (!cache.available) {
+            // Только первый запуск без кеша должен дождаться загрузки.
+            await refreshData(false);
+        } else if (!cache.fresh) {
+            // Старые данные уже показываем; обновление выполняется в фоне.
+            refreshData(false).catch(() => {});
+        }
+
+        if (!termsData || !restrictionsData) {
+            throw new Error('Нет сохранённых данных Google Sheets. Дождитесь первой фоновой загрузки.');
+        }
+        await openModal();
+    }
+
+    function init() {
+        addStyles();
+        // Автокеширование: данные загружаются в фоне при открытии страницы
+        // и затем автоматически обновляются каждые 30 минут.
+        startAutoRefresh();
+        window.TM101PartnerTermsModule = {
+            open: openPartnerTerms,
+            refresh: () => refreshData(true)
+        };
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init, { once: true });
+    } else {
+        init();
     }
 
 })();
