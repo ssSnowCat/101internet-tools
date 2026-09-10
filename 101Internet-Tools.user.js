@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         101Internet Tools — Общая коробка
 // @namespace    https://adviser-new.101internet.ru/
-// @version      2.2.36
-// @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ.
+// @version      2.2.43
+// @description  Единая панель инструментов для заявок 101internet. Офлайн-база населённых пунктов РФ и подсказка по срокам подключения, автоматические рекомендации по адресу и району.
 // @author       Roman Yakovlev
 // @match        https://adviser-new.101internet.ru/orders/*
 // @updateURL    https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/101Internet-Tools-2.2.0.user.js
@@ -24,38 +24,9 @@
 
     const STORAGE = 'tm101-tools-settings-v1';
 
-    const SMS_TEMPLATES = [
-        {
-            id: 'not_reached',
-            name: 'Не дозвонились',
-            text: `Здравствуйте! Вы оставляли заявку на подключение домашнего интернета от {Провайдер}.
-К сожалению, мы не смогли до вас дозвониться. Пожалуйста, свяжитесь с нами самостоятельно по бесплатному номеру:
-8 (800) 302-86-54. Мы работаем круглосуточно и ждем вашего звонка в любое удобное время.`
-        },
-        {
-            id: 'no_provider',
-            name: 'Нет провайдеров по адресу',
-            text: `Здравствуйте! В Вашем доме не работают провайдеры, предоставившие нам адресные базы.
-В нашем каталоге 101internet.ru
-Вы можете найти провайдеров своего района и позвонить им. Простите за неудобство.
-Мы постоянно ведём работу по расширению охвата адресов. Хорошего дня!`
-        },
-        {
-            id: 'connection_confirm',
-            name: 'Подтверждение подключения',
-            text: `Здравствуйте, {ФИО}!
-Ваша заявка {Номер заявки провайдера} на подключение интернета
-по адресу: {Адрес}.
-Дата подключения: {дата}.
-Если возникнут проблемы с подключением - сразу звоните по номеру 88007074234 мы поможем`
-        }
-    ];
-
     let settings = {
         copy: true,
         region: true,
-        sms: true,
-        smsTemplate: 'not_reached',
         minimized: false
     };
 
@@ -192,48 +163,6 @@
         };
     }
 
-    function getSmsText() {
-        const template = SMS_TEMPLATES.find(x => x.id === settings.smsTemplate) || SMS_TEMPLATES[0];
-        let text = template.text;
-
-        if (template.id === 'not_reached') {
-            const data = getData();
-            text = text.replaceAll('{Провайдер}', data.provider || 'Не указан');
-        }
-
-        if (template.id === 'connection_confirm') {
-            const data = getData();
-            text = text
-                .replaceAll('{ФИО}', data.fio || 'Не указано')
-                .replaceAll('{Номер заявки провайдера}', data.providerOrderId || 'Не указан')
-                .replaceAll('{Адрес}', data.address || 'Не найден')
-                // Для шаблона используем фактическую дату, а если она отсутствует — ближайшую.
-                .replaceAll('{дата}', data.actualDate || data.nearestDate || 'Не указана');
-        }
-
-        return text;
-    }
-
-    function copyText(text) {
-        if (typeof GM_setClipboard === 'function') {
-            GM_setClipboard(text, 'text');
-            return Promise.resolve();
-        }
-
-        return navigator.clipboard.writeText(text);
-    }
-
-    function flash(button, text = 'Скопировано') {
-        if (!button) return;
-        const old = button.textContent;
-        button.textContent = '✓ ' + text;
-        button.classList.add('tm101-success');
-        setTimeout(() => {
-            button.textContent = old;
-            button.classList.remove('tm101-success');
-        }, 1100);
-    }
-
     function openRegion() {
         if (!settings.region) return;
         if (!window.TM101RegionModule || typeof window.TM101RegionModule.createPanel !== 'function') {
@@ -294,25 +223,6 @@
                     </div>
                 </div>
 
-                <div class="tm101-section">
-                    <div class="tm101-row">
-                        <label class="tm101-switch">
-                            <input type="checkbox" id="tm101-sms-enabled">
-                            <span></span>
-                        </label>
-                        <div class="tm101-name">📱 SMS клиенту</div>
-                    </div>
-
-                    <select id="tm101-sms-template" class="tm101-select"></select>
-
-                    <div class="tm101-preview" id="tm101-sms-preview"></div>
-
-                    <div class="tm101-actions">
-                        <button type="button" class="tm101-action secondary" id="tm101-sms-preview-btn">Предпросмотр</button>
-                        <button type="button" class="tm101-action" id="tm101-sms-copy">Копировать SMS</button>
-                    </div>
-                </div>
-
                 <div class="tm101-status" id="tm101-status">Готово</div>
             </div>
         `;
@@ -321,40 +231,15 @@
 
         const copyEnabled = panel.querySelector('#tm101-copy-enabled');
         const regionEnabled = panel.querySelector('#tm101-region-enabled');
-        const smsEnabled = panel.querySelector('#tm101-sms-enabled');
-        const templateSelect = panel.querySelector('#tm101-sms-template');
-        const preview = panel.querySelector('#tm101-sms-preview');
         const status = panel.querySelector('#tm101-status');
 
         copyEnabled.checked = !!settings.copy;
         regionEnabled.checked = !!settings.region;
-        smsEnabled.checked = !!settings.sms;
-
-        SMS_TEMPLATES.forEach(item => {
-            const option = document.createElement('option');
-            option.value = item.id;
-            option.textContent = item.name;
-            templateSelect.appendChild(option);
-        });
-        templateSelect.value = settings.smsTemplate;
 
         function setStatus(text) {
             status.textContent = text;
             clearTimeout(setStatus.timer);
             setStatus.timer = setTimeout(() => status.textContent = 'Готово', 1800);
-        }
-
-        function refreshPreview() {
-            if (!settings.sms) {
-                preview.textContent = 'Модуль SMS выключен.';
-                return;
-            }
-
-            try {
-                preview.textContent = getSmsText();
-            } catch (e) {
-                preview.textContent = 'Не удалось получить данные заявки: ' + e.message;
-            }
         }
 
         copyEnabled.addEventListener('change', () => {
@@ -365,18 +250,6 @@
         regionEnabled.addEventListener('change', () => {
             settings.region = regionEnabled.checked;
             saveSettings();
-        });
-
-        smsEnabled.addEventListener('change', () => {
-            settings.sms = smsEnabled.checked;
-            saveSettings();
-            refreshPreview();
-        });
-
-        templateSelect.addEventListener('change', () => {
-            settings.smsTemplate = templateSelect.value;
-            saveSettings();
-            refreshPreview();
         });
 
         panel.querySelector('#tm101-copy').addEventListener('click', async (event) => {
@@ -405,44 +278,36 @@
         });
 
         panel.querySelector('#tm101-partner-terms').addEventListener('click', async (event) => {
+            const button = event.currentTarget;
             try {
-                if (!window.TM101PartnerTermsModule || typeof window.TM101PartnerTermsModule.open !== 'function') {
-                    throw new Error('Модуль сроков ещё не загрузился.');
-                }
-                const button = event.currentTarget;
                 button.disabled = true;
                 button.textContent = 'Загрузка…';
-                await window.TM101PartnerTermsModule.open();
+
+                // Модуль сроков находится ниже в этом же userscript. При быстром
+                // клике сразу после загрузки страницы он мог ещё не успеть
+                // зарегистрировать свой API. Ждём его появление до 5 секунд.
+                let module = window.TM101PartnerTermsModule;
+                if (!module || typeof module.open !== 'function') {
+                    const started = Date.now();
+                    while (Date.now() - started < 5000) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        module = window.TM101PartnerTermsModule;
+                        if (module && typeof module.open === 'function') break;
+                    }
+                }
+
+                if (!module || typeof module.open !== 'function') {
+                    throw new Error('Модуль сроков не запустился. Обнови страницу Ctrl+F5.');
+                }
+
+                await module.open();
                 setStatus('Сроки подключения открыты');
             } catch (e) {
-                console.error(e);
-                setStatus('Ошибка: ' + e.message);
+                console.error('[101Internet] Сроки подключения:', e);
+                setStatus('Ошибка: ' + (e?.message || e));
             } finally {
-                const button = panel.querySelector('#tm101-partner-terms');
-                if (button) { button.disabled = false; button.textContent = 'Открыть'; }
-            }
-        });
-
-        panel.querySelector('#tm101-sms-preview-btn').addEventListener('click', () => {
-            refreshPreview();
-            setStatus('Предпросмотр обновлён');
-        });
-
-        panel.querySelector('#tm101-sms-copy').addEventListener('click', async (event) => {
-            if (!settings.sms) {
-                setStatus('Модуль выключен');
-                return;
-            }
-
-            try {
-                const text = getSmsText();
-                await copyText(text);
-                preview.textContent = text;
-                flash(event.currentTarget);
-                setStatus('SMS скопировано в буфер');
-            } catch (e) {
-                console.error(e);
-                setStatus('Не удалось скопировать SMS');
+                const btn = panel.querySelector('#tm101-partner-terms');
+                if (btn) { btn.disabled = false; btn.textContent = 'Открыть'; }
             }
         });
 
@@ -461,7 +326,6 @@
             min.textContent = '☰';
         }
 
-        refreshPreview();
     }
 
     function makeDraggable(element, handle, storageKey) {
@@ -691,40 +555,6 @@
                 background: #2e7d32;
             }
 
-            .tm101-select {
-                width: 100%;
-                margin-top: 10px;
-                padding: 8px 9px;
-                border: 1px solid #ccd2d9;
-                border-radius: 8px;
-                background: #fff;
-                font-size: 12px;
-            }
-
-            .tm101-preview {
-                margin-top: 9px;
-                padding: 9px;
-                min-height: 90px;
-                max-height: 180px;
-                overflow: auto;
-                white-space: pre-wrap;
-                border: 1px solid #e0e4e8;
-                border-radius: 8px;
-                background: #fafbfc;
-                font-size: 12px;
-                line-height: 1.4;
-            }
-
-            .tm101-actions {
-                display: flex;
-                gap: 8px;
-                margin-top: 9px;
-            }
-
-            .tm101-actions .tm101-action {
-                flex: 1;
-            }
-
             .tm101-status {
                 padding: 3px 2px 0;
                 font-size: 11px;
@@ -745,7 +575,7 @@
 
     function initShell() {
         addShellStyles();
-        createShell();
+    createShell();
     }
 
     if (document.readyState === 'loading') {
@@ -4775,7 +4605,12 @@
     // API для общей панели
     window.TM101RegionModule = {
         createPanel,
-        isOrdersPage
+        isOrdersPage,
+        findRegion,
+        searchLocalCity,
+        findLocalCityRegions,
+        getRegionFromResult,
+        getCityName
     };
 
 })();
@@ -4804,8 +4639,10 @@
 
     const REFRESH_MS = 30 * 60 * 1000;
     const CACHE_MAX_AGE_MS = REFRESH_MS;
-    const CACHE_TERMS = 'tm101-partner-terms-cache-v2';
-    const CACHE_RESTRICTIONS = 'tm101-partner-restrictions-cache-v2';
+    const ADDRESS_DEBOUNCE_MS = 650;
+    const AUTO_OPEN_ON_ADDRESS_CHANGE = false;
+    const CACHE_TERMS = 'tm101-partner-terms-cache-v4';
+    const CACHE_RESTRICTIONS = 'tm101-partner-restrictions-cache-v4';
 
     const PROVIDERS = {
         'билайн': { key: 'билайн', name: 'Билайн', alias: 'билайн' },
@@ -4828,6 +4665,120 @@
     let refreshInProgress = false;
     let refreshPromise = null;
     let loadDiagnostics = { terms: null, restrictions: null, lastError: '' };
+    let lastAddressSignature = '';
+    let addressObserver = null;
+    let addressTimer = null;
+    let autoOpenTimer = null;
+
+    // МРФ по субъектам РФ. Москва и Московская область — Столичный.
+    const MRF_BY_REGION = {
+        'Волга': [
+            'Башкортостан', 'Кировская область', 'Марий Эл', 'Мордовия', 'Нижегородская область',
+            'Оренбургская область', 'Пензенская область', 'Самарская область', 'Саратовская область',
+            'Татарстан', 'Удмуртская Республика', 'Ульяновская область', 'Чувашская Республика'
+        ],
+        'Дальний Восток': [
+            'Амурская область', 'Еврейская Автономная область', 'Камчатский край', 'Магаданская область',
+            'Приморский край', 'Саха (Якутия)', 'Сахалинская область', 'Хабаровский край',
+            'Чукотский Автономный округ'
+        ],
+        'Северо-Запад': [
+            'Архангельская область', 'Вологодская область', 'Калининградская область', 'Карелия',
+            'Коми', 'Ленинградская область', 'Мурманская область', 'Новгородская область',
+            'Псковская область', 'Санкт-Петербург'
+        ],
+        'Сибирь': [
+            'Алтай', 'Алтайский край', 'Бурятия', 'Забайкальский край', 'Иркутская область',
+            'Кемеровская область — Кузбасс', 'Красноярский край', 'Новосибирская область',
+            'Омская область', 'Томская область', 'Тыва', 'Хакасия'
+        ],
+        'Столичный': ['Москва', 'Московская область'],
+        'Урал': [
+            'Курганская область', 'Пермский край', 'Свердловская область', 'Тюменская область',
+            'Ханты-Мансийский автономный округ - Югра', 'Челябинская область',
+            'Ямало-Ненецкий автономный округ'
+        ],
+        'Центр': [
+            'Белгородская область', 'Брянская область', 'Владимирская область', 'Воронежская область',
+            'Ивановская область', 'Калужская область', 'Костромская область', 'Курская область',
+            'Липецкая область', 'Орловская область', 'Рязанская область', 'Смоленская область',
+            'Тамбовская область', 'Тверская область', 'Тульская область', 'Ярославская область'
+        ],
+        'ЮГ': [
+            'Адыгея', 'Астраханская область', 'Волгоградская область', 'Дагестан', 'Ингушетия',
+            'Кабардино-Балкарская Республика', 'Калмыкия', 'Карачаево-Черкесская Республика',
+            'Краснодарский край', 'Ростовская область', 'Северная Осетия — Алания',
+            'Ставропольский край', 'Чеченская Республика'
+        ]
+    };
+
+    function mrfForRegion(region) {
+        if (!region) return '';
+        const name = key(region.name || region);
+        if (name === 'москва' || name.includes('московская область')) return 'Столичный';
+        for (const [mrf, names] of Object.entries(MRF_BY_REGION)) {
+            if (names.some(x => key(x) === name || name.includes(key(x)) || key(x).includes(name))) return mrf;
+        }
+        return '';
+    }
+
+    function regionCandidates(address) {
+        const out = [];
+        const add = v => {
+            const value = norm(v);
+            if (value && !out.some(x => key(x) === key(value))) out.push(value);
+        };
+        add(address.city);
+        add(address.region);
+        add(address.district);
+        return out;
+    }
+
+    async function resolveAddressRegion(address) {
+        const candidates = regionCandidates(address);
+        for (const value of candidates) {
+            const direct = window.TM101RegionModule?.findRegion?.(value);
+            if (direct) return { region: direct, source: value, ambiguous: false };
+        }
+        // В поле «Регион» Adviser часто находится город. Используем ту же
+        // встроенную офлайн-базу ~82 тыс. населённых пунктов, что и модуль региона.
+        const cityValues = [address.city, address.region].filter(Boolean);
+        for (const value of cityValues) {
+            try {
+                const regions = await window.TM101RegionModule?.findLocalCityRegions?.(value) || [];
+                if (regions.length === 1) return { region: regions[0], source: value, ambiguous: false };
+                if (regions.length > 1) return { region: null, source: value, ambiguous: true, regions };
+            } catch (e) {
+                console.warn('[TM101 PartnerTerms] Ошибка поиска города в офлайн-базе:', e);
+            }
+        }
+        return { region: null, source: '', ambiguous: false };
+    }
+
+    function providerStatus(days, restrictions) {
+        const blocked = restrictions.some(r => /не продавать|не подключать/i.test(r.text));
+        if (blocked) return { cls: 'danger', label: 'НЕ ПРОДАВАТЬ' };
+        const n = Number(days);
+        if (Number.isFinite(n)) {
+            if (n <= 3) return { cls: 'good', label: 'Быстро' };
+            if (n <= 7) return { cls: 'warn', label: 'Ожидание' };
+            return { cls: 'danger', label: 'Длительное ожидание' };
+        }
+        if (restrictions.length) return { cls: 'warn', label: 'Есть ограничения' };
+        return { cls: 'muted', label: 'Нет данных' };
+    }
+
+    function extractAlternative(restrictions) {
+        for (const r of restrictions) {
+            const m = String(r.text || '').match(/Альтернатива:\s*([^·]+)/i);
+            if (m) return norm(m[1]);
+        }
+        return '';
+    }
+
+    function getCurrentProviderKeys(providers) {
+        return new Set(providers.map(p => p.dataKey || p.key));
+    }
 
     function norm(value) {
         return String(value ?? '')
@@ -4972,7 +4923,7 @@
                 request({
                     method: 'GET',
                     url,
-                    timeout: 30000,
+                    timeout: 7000,
                     anonymous: false,
                     nocache: true,
 
@@ -5712,6 +5663,107 @@
                 font-size: 12px;
             }
 
+            #${MODAL_ID} .tm101-pt-head-actions {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+            }
+
+            #${MODAL_ID} .tm101-pt-refresh,
+            #${MODAL_ID} .tm101-pt-close {
+                width: 30px;
+                height: 30px;
+                border: 0;
+                border-radius: 7px;
+                background: transparent;
+                cursor: pointer;
+                font-size: 19px;
+                line-height: 1;
+            }
+
+            #${MODAL_ID} .tm101-pt-refresh:hover,
+            #${MODAL_ID} .tm101-pt-close:hover { background: #eef1f5; }
+
+            #${MODAL_ID} .tm101-pt-refresh:disabled { opacity: .45; cursor: default; }
+            #${MODAL_ID} .tm101-pt-refresh.spinning { animation: tm101-pt-spin .8s linear infinite; }
+            @keyframes tm101-pt-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+            #${MODAL_ID} .tm101-pt-context {
+                padding: 10px 12px;
+                border: 1px solid #e0e5eb;
+                border-radius: 9px;
+                background: #f7f9fb;
+                font-size: 13px;
+                line-height: 1.5;
+            }
+
+            #${MODAL_ID} .tm101-pt-context-small {
+                margin-top: 3px;
+                color: #68727d;
+                font-size: 11px;
+            }
+
+            #${MODAL_ID} .tm101-pt-recommendation {
+                margin: 10px 0;
+                padding: 10px 12px;
+                border-radius: 9px;
+                background: #eaf4ff;
+                color: #174a75;
+                font-size: 12px;
+                line-height: 1.45;
+            }
+
+            #${MODAL_ID} .tm101-pt-row.good { border-left: 4px solid #2e7d32; padding-left: 8px; }
+            #${MODAL_ID} .tm101-pt-row.warn { border-left: 4px solid #ed8b00; padding-left: 8px; }
+            #${MODAL_ID} .tm101-pt-row.danger { border-left: 4px solid #d32f2f; padding-left: 8px; }
+            #${MODAL_ID} .tm101-pt-row.muted { border-left: 4px solid #aab2bb; padding-left: 8px; }
+
+            #${MODAL_ID} .tm101-pt-dot {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                margin-right: 6px;
+                border-radius: 50%;
+                background: #aab2bb;
+                vertical-align: middle;
+            }
+            #${MODAL_ID} .tm101-pt-row.good .tm101-pt-dot { background: #2e7d32; }
+            #${MODAL_ID} .tm101-pt-row.warn .tm101-pt-dot { background: #ed8b00; }
+            #${MODAL_ID} .tm101-pt-row.danger .tm101-pt-dot { background: #d32f2f; }
+
+            #${MODAL_ID} .tm101-pt-badge {
+                display: inline-block;
+                margin-right: 7px;
+                padding: 2px 6px;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: 700;
+                background: #eef1f5;
+                color: #5f6872;
+                vertical-align: 1px;
+            }
+            #${MODAL_ID} .tm101-pt-badge.good { background: #e8f5e9; color: #216e39; }
+            #${MODAL_ID} .tm101-pt-badge.warn { background: #fff3df; color: #8a4b00; }
+            #${MODAL_ID} .tm101-pt-badge.danger { background: #fdecec; color: #a52828; }
+
+            #${MODAL_ID} .tm101-pt-alternative {
+                margin-top: 5px;
+                padding: 6px 8px;
+                border-radius: 6px;
+                background: #edf7ed;
+                color: #28613a;
+                font-size: 12px;
+            }
+
+            #${MODAL_ID} .tm101-pt-stale-note { color: #8a4b00; font-size: 10px; }
+            #${MODAL_ID} .tm101-pt-empty { padding: 14px; text-align: center; color: #777; font-size: 12px; }
+
+            #${MODAL_ID} .tm101-pt-loading-box { padding:28px 18px; text-align:center; display:flex; flex-direction:column; gap:10px; align-items:center; }
+            #${MODAL_ID} .tm101-pt-loading-small { font-size:12px; opacity:.72; line-height:1.4; }
+            #${MODAL_ID} .tm101-pt-spinner { width:28px; height:28px; border:3px solid rgba(0,0,0,.12); border-top-color:currentColor; border-radius:50%; animation:tm101PtSpin .8s linear infinite; }
+            #${MODAL_ID} .tm101-pt-load-error { color:#9b2c2c; }
+            #${MODAL_ID} .tm101-pt-retry { border:0; border-radius:7px; padding:7px 12px; cursor:pointer; font-weight:600; }
+            @keyframes tm101PtSpin { to { transform:rotate(360deg); } }
             #${MODAL_ID} .tm101-pt-footer {
                 padding-top: 10px;
                 color: #777;
@@ -5761,60 +5813,137 @@
         if (modal) modal.remove();
     }
 
-    async function openModal() {
-        closeModal();
+    async function openModal(options = {}) {
+        const existing = document.getElementById(MODAL_ID);
+        if (existing && !options.refresh) existing.remove();
+        if (existing && options.refresh) existing.remove();
 
-        const mainCard = findAddressCard('Основной адрес');
-        const checkCard = findAddressCard('Проверочный поиск');
-        // Партнёров ищем непосредственно по заголовку адресного блока.
-        // Не зависим от того, какой контейнер MUI вернул findAddressCard().
-        const mainPartners = findPartnersForAddressTitle('Основной адрес');
-        const checkPartners = findPartnersForAddressTitle('Проверочный поиск');
-        console.debug('[TM101 PartnerTerms]', {
-            mainCard: !!mainCard,
-            checkCard: !!checkCard,
-            googleProviders: Array.from(getGoogleProviderKeys()),
-            mainPartners: mainPartners.map(p => p.name),
-            checkPartners: checkPartners.map(p => p.name)
-        });
         const mainAddress = getAddressContext('main');
         const checkAddress = getAddressContext('check');
+        const resolved = await resolveAddressRegion(mainAddress);
+        const region = resolved.region;
+        const mrf = mrfForRegion(region);
+        const googleProviderKeys = getGoogleProviderKeys();
 
-        const buildSection = (title, address, providers) => {
-            const place = resolvePlaceFromCandidates(address.places);
-            const addressText = [
-                address.city ? `Населённый пункт: ${address.city}` : '',
-                address.region ? `Регион: ${address.region}` : '',
-                address.district ? `Район: ${address.district}` : ''
-            ].filter(Boolean).join(' · ');
+        const mainPartners = findPartnersForAddressTitle('Основной адрес');
+        const checkPartners = findPartnersForAddressTitle('Проверочный поиск');
 
-            const rows = providers.map(provider => {
-                const rawTerm = place?.providers?.[provider.dataKey || provider.key] || null;
-                const term = typeof rawTerm === 'object' && rawTerm !== null
-                    ? String(rawTerm.days ?? '')
-                    : String(rawTerm || '');
-                const stale = typeof rawTerm === 'object' && rawTerm !== null ? !!rawTerm.stale : false;
-                const restrictions = findRestrictions(provider.dataKey || provider.key, address.places);
-                let valueHtml = term
-                    ? `<span class="tm101-pt-days${stale ? ' tm101-pt-stale' : ''}">${escapeHtml(term)} ${Number(term) === 1 ? 'день' : Number(term) >= 2 && Number(term) <= 4 ? 'дня' : 'дней'}${stale ? ' <span class="tm101-pt-stale-note">(информация старше 7 дней)</span>' : ''}</span>`
-                    : `<span class="tm101-pt-muted">нет данных</span>`;
+        // Если Adviser ещё не успел отрисовать «Наши партнёры», используем
+        // всех провайдеров, которые реально присутствуют в текущем блоке.
+        const allProviders = [...mainPartners, ...checkPartners].filter((p, i, arr) =>
+            arr.findIndex(x => key(x.displayName || x.name) === key(p.displayName || p.name)) === i
+        );
 
-                if (restrictions.length) {
-                    valueHtml += restrictions.map(r => `<div class="tm101-pt-warning">⚠ ${escapeHtml(r.type)}: ${escapeHtml(r.text)}</div>`).join('');
-                }
+        const addressText = [
+            mainAddress.region ? `Регион: ${mainAddress.region}` : '',
+            mainAddress.district ? `Район: ${mainAddress.district}` : '',
+            checkAddress.city ? `Населённый пункт: ${checkAddress.city}` : ''
+        ].filter(Boolean).join(' · ');
 
-                return `<div class="tm101-pt-row"><div class="tm101-pt-provider">${escapeHtml(provider.displayName || provider.name)}</div><div class="tm101-pt-value">${valueHtml}</div></div>`;
-            }).join('');
+        const placeCandidates = [
+            mainAddress.region, mainAddress.district,
+            checkAddress.city, checkAddress.region,
+            region?.name
+        ].filter(Boolean);
+        const place = resolvePlaceFromCandidates(placeCandidates);
 
-            return `<div class="tm101-pt-section"><div class="tm101-pt-section-title">${escapeHtml(title)}</div><div class="tm101-pt-address">${escapeHtml(addressText || 'Адрес не определён')}${place ? `<br><span class="tm101-pt-table-place">Строка таблицы: ${escapeHtml(place.label)}</span>` : ''}</div>${rows || '<div class="tm101-pt-muted">Партнёры не найдены.</div>'}</div>`;
+        const rowsForProvider = provider => {
+            const dataKey = provider.dataKey || provider.key;
+            const rawTerm = place?.providers?.[dataKey] || null;
+            const termObj = typeof rawTerm === 'object' && rawTerm !== null ? rawTerm : null;
+            const term = termObj ? String(termObj.days ?? '') : String(rawTerm || '');
+            const stale = !!termObj?.stale;
+            const restrictions = findRestrictions(dataKey, [
+                ...mainAddress.places, ...checkAddress.places,
+                mainAddress.region, mainAddress.district, checkAddress.city,
+                region?.name
+            ].filter(Boolean));
+            const status = providerStatus(term, restrictions);
+            const alternative = extractAlternative(restrictions);
+            return { provider, dataKey, term, stale, restrictions, status, alternative };
+        };
+
+        const rows = allProviders.map(rowsForProvider);
+        const blocked = new Set(rows.filter(r => r.status.cls === 'danger' && r.status.label === 'НЕ ПРОДАВАТЬ').map(r => key(r.provider.displayName || r.provider.name)));
+        const available = rows.filter(r => r.term && !blocked.has(key(r.provider.displayName || r.provider.name)));
+        const best = available.slice().sort((a, b) => Number(a.term) - Number(b.term))[0] || null;
+
+        const recommendation = best
+            ? `Рекомендуемый вариант: <strong>${escapeHtml(best.provider.displayName || best.provider.name)}</strong> — ${escapeHtml(best.term)} ${Number(best.term) === 1 ? 'день' : Number(best.term) >= 2 && Number(best.term) <= 4 ? 'дня' : 'дней'}.`
+            : (rows.find(r => r.alternative) ? `Рекомендация: <strong>${escapeHtml(rows.find(r => r.alternative).alternative)}</strong>.` : 'Рекомендация по текущему адресу не определена.');
+
+        const renderRow = r => {
+            const pName = r.provider.displayName || r.provider.name;
+            const daysText = r.term
+                ? `${escapeHtml(r.term)} ${Number(r.term) === 1 ? 'день' : Number(r.term) >= 2 && Number(r.term) <= 4 ? 'дня' : 'дней'}`
+                : 'нет данных';
+            const restrictionsHtml = r.restrictions.map(x =>
+                `<div class="tm101-pt-warning">⚠ ${escapeHtml(x.type)}: ${escapeHtml(x.text)}</div>`
+            ).join('');
+            return `<div class="tm101-pt-row ${r.status.cls}">
+                <div class="tm101-pt-provider"><span class="tm101-pt-dot"></span>${escapeHtml(pName)}</div>
+                <div class="tm101-pt-value">
+                    <span class="tm101-pt-badge ${r.status.cls}">${escapeHtml(r.status.label)}</span>
+                    <span class="tm101-pt-days${r.stale ? ' tm101-pt-stale' : ''}">${daysText}</span>
+                    ${r.stale ? '<span class="tm101-pt-stale-note">информация старше 7 дней</span>' : ''}
+                    ${r.alternative ? `<div class="tm101-pt-alternative">↳ Альтернатива: <strong>${escapeHtml(r.alternative)}</strong></div>` : ''}
+                    ${restrictionsHtml}
+                </div>
+            </div>`;
+        };
+
+        const section = (title, providers) => {
+            if (!providers.length) return '';
+            return `<div class="tm101-pt-section">
+                <div class="tm101-pt-section-title">${escapeHtml(title)}</div>
+                ${providers.map(renderRow).join('')}
+            </div>`;
         };
 
         const modal = document.createElement('div');
         modal.id = MODAL_ID;
-        modal.innerHTML = `<div class="tm101-pt-window" role="dialog" aria-modal="true"><div class="tm101-pt-head"><span>⏱ Сроки подключения и ограничения</span><button type="button" class="tm101-pt-close" aria-label="Закрыть">×</button></div><div class="tm101-pt-body">${buildSection('Основной адрес', mainAddress, mainPartners)}${buildSection('Проверочный поиск', checkAddress, checkPartners)}<div class="tm101-pt-footer">Сроки берутся из листа «Завалы монтажников», ограничения — из листа «Ограничения - для продаж». Данные автоматически обновляются каждые 30 минут. Окно открывается из локального кеша без ожидания загрузки.<br><br><details><summary>Диагностика загрузки</summary><pre class="tm101-pt-debug">${escapeHtml(JSON.stringify(loadDiagnostics, null, 2))}</pre></details></div></div></div>`;
+        modal.innerHTML = `<div class="tm101-pt-window" role="dialog" aria-modal="true">
+            <div class="tm101-pt-head">
+                <span>⏱ Условия подключения</span>
+                <div class="tm101-pt-head-actions">
+                    <button type="button" class="tm101-pt-refresh" title="Обновить данные">↻</button>
+                    <button type="button" class="tm101-pt-close" aria-label="Закрыть">×</button>
+                </div>
+            </div>
+            <div class="tm101-pt-body">
+                <div class="tm101-pt-context">
+                    <div><strong>📍 ${escapeHtml(mainAddress.region || checkAddress.region || 'Регион не определён')}</strong>${mrf ? ` · МРФ: <strong>${escapeHtml(mrf)}</strong>` : ''}</div>
+                    <div class="tm101-pt-context-small">${escapeHtml(addressText || 'Адрес не определён')}</div>
+                    ${resolved.ambiguous ? '<div class="tm101-pt-warning">⚠ Название населённого пункта неоднозначно. Уточните регион в Адвайзере.</div>' : ''}
+                </div>
+                <div class="tm101-pt-recommendation">💡 ${recommendation}</div>
+                ${section('Провайдеры по адресу', rows)}
+                ${!rows.length ? '<div class="tm101-pt-empty">В текущем адресном блоке провайдеры ещё не найдены.</div>' : ''}
+                <div class="tm101-pt-footer">
+                    Данные: «Завалы монтажников» и «Ограничения - для продаж». Обновление в фоне каждые 30 минут.
+                    <span class="tm101-pt-cache">${loadDiagnostics.cacheUpdatedAt ? ' Последнее обновление: ' + new Date(loadDiagnostics.cacheUpdatedAt).toLocaleTimeString() : ''}</span>
+                </div>
+            </div>
+        </div>`;
         document.body.appendChild(modal);
-        modal.querySelector('.tm101-pt-close').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        modal.querySelector('.tm101-pt-close').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+        modal.querySelector('.tm101-pt-refresh').addEventListener('click', async e => {
+            const b = e.currentTarget;
+            if (refreshInProgress) return;
+            b.disabled = true;
+            b.classList.add('spinning');
+            try {
+                await refreshData(true);
+                await openModal({ refresh: true });
+            } catch (err) {
+                console.error(err);
+                alert('Не удалось обновить данные Google Таблицы.\n\n' + (err?.message || err));
+            } finally {
+                const current = document.querySelector(`#${MODAL_ID} .tm101-pt-refresh`);
+                if (current) { current.disabled = false; current.classList.remove('spinning'); }
+            }
+        });
     }
 
     function extractPartnerItemsFromTitle(partnerTitle) {
@@ -6121,34 +6250,104 @@
         }, REFRESH_MS);
     }
 
-    async function openPartnerTerms() {
-        // Главное: окно открывается из локального кеша практически мгновенно.
-        // Google Sheets никогда не блокирует открытие, если есть сохранённые данные.
-        const cache = loadCachedData();
-
-        if (!cache.available) {
-            // Только первый запуск без кеша должен дождаться загрузки.
-            await refreshData(false);
-        } else if (!cache.fresh) {
-            // Старые данные уже показываем; обновление выполняется в фоне.
-            refreshData(false).catch(() => {});
-        }
-
-        if (!termsData || !restrictionsData) {
-            throw new Error('Нет сохранённых данных Google Sheets. Дождитесь первой фоновой загрузки.');
-        }
-        await openModal();
+    function showTermsLoadingModal(message = 'Загружаем данные из Google Таблицы…') {
+        const old = document.getElementById(MODAL_ID);
+        if (old) old.remove();
+        const modal = document.createElement('div');
+        modal.id = MODAL_ID;
+        modal.className = 'tm101-pt-modal';
+        modal.innerHTML = `<div class="tm101-pt-dialog"><div class="tm101-pt-head"><span>⏱ Условия подключения</span><div class="tm101-pt-head-actions"><button type="button" class="tm101-pt-close" aria-label="Закрыть">×</button></div></div><div class="tm101-pt-body"><div class="tm101-pt-loading-box"><div class="tm101-pt-spinner"></div><strong>${escapeHtml(message)}</strong><div class="tm101-pt-loading-small">Окно уже открыто. Загрузка выполняется в фоне.</div></div></div></div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('.tm101-pt-close').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     }
+
+    function showTermsLoadError(error) {
+        const modal = document.getElementById(MODAL_ID);
+        if (!modal) return;
+        const body = modal.querySelector('.tm101-pt-body');
+        if (!body) return;
+        body.innerHTML = `<div class="tm101-pt-loading-box tm101-pt-load-error"><strong>⚠ Не удалось загрузить данные</strong><div class="tm101-pt-loading-small">${escapeHtml(String(error?.message || error || 'Неизвестная ошибка'))}</div><button type="button" class="tm101-pt-retry">↻ Повторить</button></div>`;
+        body.querySelector('.tm101-pt-retry')?.addEventListener('click', () => openPartnerTerms());
+    }
+
+    async function openPartnerTerms() {
+        const cache = loadCachedData();
+        if (cache.available) {
+            await openModal();
+            if (!cache.fresh) refreshData(false).then(ok => {
+                if (ok && document.getElementById(MODAL_ID)) openModal({ refresh: true }).catch(console.error);
+            }).catch(console.error);
+            return;
+        }
+
+        // Первый запуск: не ждём Google Sheets внутри обработчика кнопки.
+        // Открываем окно сразу, а данные подгружаем в фоне.
+        showTermsLoadingModal();
+        refreshData(false).then(ok => {
+            if (ok) {
+                if (document.getElementById(MODAL_ID)) openModal({ refresh: true }).catch(console.error);
+            } else {
+                showTermsLoadError(new Error(loadDiagnostics.lastError || 'Google Таблица не вернула данные.'));
+            }
+        }).catch(error => {
+            console.error('[TM101 PartnerTerms] Ошибка первой загрузки:', error);
+            showTermsLoadError(error);
+        });
+    }
+
+    function addressSignature() {
+        try {
+            const main = getAddressContext('main');
+            const check = getAddressContext('check');
+            return [main.region, main.district, check.region, check.city]
+                .map(key).join('|');
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function startAddressWatcher() {
+        if (addressObserver) return;
+
+        // Запоминаем первоначальное состояние, чтобы не открывать окно сразу
+        // после загрузки уже заполненной заявки.
+        lastAddressSignature = addressSignature();
+
+        const check = () => {
+            const signature = addressSignature();
+            if (!signature || signature === lastAddressSignature) return;
+            lastAddressSignature = signature;
+
+            clearTimeout(addressTimer);
+            addressTimer = setTimeout(async () => {
+                if (!AUTO_OPEN_ON_ADDRESS_CHANGE) return;
+                try {
+                    const main = getAddressContext('main');
+                    if (!main.region) return;
+                    await openPartnerTerms();
+                } catch (e) {
+                    console.debug('[TM101 PartnerTerms] Автообновление адреса:', e?.message || e);
+                }
+            }, ADDRESS_DEBOUNCE_MS);
+        };
+
+        // Adviser — React-приложение: значение input может меняться без события
+        // DOM-мутации. Поэтому лёгкий polling надёжнее MutationObserver.
+        addressObserver = setInterval(check, 900);
+    }
+
+    // Регистрируем API сразу, до фоновой загрузки данных. Так общая панель
+    // никогда не увидит состояние «модуль ещё не загрузился» из-за порядка IIFE.
+    window.TM101PartnerTermsModule = {
+        open: openPartnerTerms,
+        refresh: () => refreshData(true)
+    };
 
     function init() {
         addStyles();
-        // Автокеширование: данные загружаются в фоне при открытии страницы
-        // и затем автоматически обновляются каждые 30 минут.
         startAutoRefresh();
-        window.TM101PartnerTermsModule = {
-            open: openPartnerTerms,
-            refresh: () => refreshData(true)
-        };
+        startAddressWatcher();
     }
 
     if (document.readyState === 'loading') {
