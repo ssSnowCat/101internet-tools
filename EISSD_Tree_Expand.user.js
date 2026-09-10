@@ -2,6 +2,8 @@
 // @name         ЕИССД: Раскрытие дерева (Кнопка в заголовке)
 // @namespace    http://tampermonkey.net
 // @version      1.7
+// @downloadURL  https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/EISSD_Tree_Expand.user.js
+// @updateURL    https://raw.githubusercontent.com/ssSnowCat/101internet-tools/main/EISSD_Tree_Expand.user.js
 // @description  Кнопка «Раскрыть дерево» в заголовке «Создание заявки».
 // @author       Roman Yakovlev
 // @match        https://eissd.rt.ru/order/phys/*
