@@ -1,10 +1,9 @@
 // ==UserScript==
-// @name         ЕИССД: Раскрытие дерева (Плавающая синяя кнопка)
+// @name         ЕИССД: Раскрытие дерева (Кнопка в заголовке)
 // @namespace    http://tampermonkey.net
-// @version      1.5
-// @description  Синяя плавающая кнопка для раскрытия jQuery Treeview в ЕИССД, которая не улетает при скролле.
+// @version      1.6
+// @description  Кнопка «Раскрыть дерево» внутри заголовка «Создание заявки» в ЕИССД.
 // @author       Roman Yakovlev
-// @match        https://eissd.rt.ru/order/phys/*
 // @match        https://eissd.rt.ru/order/phys/*
 // @grant        none
 // ==/UserScript==
@@ -19,7 +18,9 @@
         isProcessing = true;
 
         // Находим зоны плюсиков у неразвернутых веток дерева
-        const hitAreas = document.querySelectorAll('.combo-tree .expandable > .hitarea, .treeview .expandable > .hitarea');
+        const hitAreas = document.querySelectorAll(
+            '.combo-tree .expandable > .hitarea, .treeview .expandable > .hitarea'
+        );
 
         if (hitAreas.length === 0) {
             console.log('[ЕИССД]: Все доступные ветки дерева успешно развернуты.');
@@ -33,6 +34,7 @@
                 cancelable: true,
                 view: window
             });
+
             hitArea.dispatchEvent(clickEvent);
         });
 
@@ -43,54 +45,92 @@
         }, 400);
     }
 
-    // Создание фиксированной плавающей кнопки
-    function createFloatingButton() {
+    // Создание кнопки внутри заголовка «Создание заявки»
+    function createHeaderButton() {
+        // Ищем именно заголовок из указанной разметки
+        const header = document.querySelector('h1.c-head-36.js-head');
+
+        if (!header) return;
+
         // Проверяем дубликаты
-        if (document.getElementById('eissd-expand-btn-fixed')) return;
+        if (document.getElementById('eissd-expand-btn-header')) return;
 
         const btn = document.createElement('button');
-        btn.id = 'eissd-expand-btn-fixed';
+        btn.id = 'eissd-expand-btn-header';
+        btn.type = 'button';
         btn.innerText = '🌳 Раскрыть дерево';
+        btn.title = 'Раскрыть все доступные ветки дерева';
 
-        // Позиционирование 'fixed' привязывает кнопку к экрану, она "плавает" при скролле
+        // Кнопка находится непосредственно внутри h1
         Object.assign(btn.style, {
-            position: 'fixed',
-            top: '80px',            // Закреплена в верхней части экрана (на уровне блока общей информации)
-            right: '40px',          // Сдвинута к правому краю, в выделенную вами зону
-            zIndex: '999999',       // Максимальный приоритет видимости поверх любых таблиц и окон
-            padding: '8px 14px',
-            backgroundColor: '#1a73e8', // Насыщенный синий цвет
+            display: 'inline-flex',
+            alignItems: 'center',
+            verticalAlign: 'middle',
+            marginLeft: '18px',
+            padding: '7px 14px',
+            backgroundColor: '#1a73e8',
             color: '#ffffff',
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
             fontWeight: 'bold',
-            boxShadow: '0 3px 6px rgba(0,0,0,0.25)', // Красивая тень, подчеркивающая парение
             fontSize: '12px',
-            fontFamily: 'sans-serif',
+            lineHeight: '1.2',
+            fontFamily: 'Arial, sans-serif',
+            boxShadow: '0 2px 5px rgba(0,0,0,0.20)',
             transition: 'background-color 0.15s ease, transform 0.1s ease'
         });
 
-        // Визуальные эффекты при взаимодействии
-        btn.onmouseover = () => btn.style.backgroundColor = '#0b57d0'; // Темнеет при наведении
-        btn.onmouseout = () => btn.style.backgroundColor = '#1a73e8';
-        btn.onmousedown = () => btn.style.transform = 'scale(0.96)';   // Слегка вдавливается при клике
-        btn.onmouseup = () => btn.style.transform = 'scale(1)';
+        btn.addEventListener('mouseenter', () => {
+            btn.style.backgroundColor = '#0b57d0';
+        });
+
+        btn.addEventListener('mouseleave', () => {
+            btn.style.backgroundColor = '#1a73e8';
+            btn.style.transform = 'scale(1)';
+        });
+
+        btn.addEventListener('mousedown', () => {
+            btn.style.transform = 'scale(0.96)';
+        });
+
+        btn.addEventListener('mouseup', () => {
+            btn.style.transform = 'scale(1)';
+        });
 
         btn.addEventListener('click', (e) => {
             e.preventDefault();
-            e.stopPropagation(); // Защита от закрытия выпадающего списка ЕИССД при клике
+            e.stopPropagation();
+
             expandComboTree();
         });
 
-        document.body.appendChild(btn);
-        console.log('[ЕИССД]: Синяя плавающая кнопка успешно закреплена на экране.');
+        // Добавляем кнопку в конец h1:
+        // <h1 ...>Создание заявки<span class="calcState"></span><button>...</button></h1>
+        header.appendChild(btn);
+
+        console.log('[ЕИССД]: Кнопка «Раскрыть дерево» добавлена в заголовок «Создание заявки».');
     }
 
-    // Запуск инициализации кнопки
+    // Инициализация
+    function init() {
+        createHeaderButton();
+
+        // Если заголовок создаётся/перерисовывается сайтом динамически,
+        // пробуем добавить кнопку снова после изменения DOM.
+        const observer = new MutationObserver(() => {
+            createHeaderButton();
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createFloatingButton);
+        document.addEventListener('DOMContentLoaded', init);
     } else {
-        createFloatingButton();
+        init();
     }
 })();
