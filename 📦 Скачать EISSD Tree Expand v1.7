@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ЕИССД: Раскрытие дерева (Кнопка в заголовке)
 // @namespace    http://tampermonkey.net
-// @version      1.6
-// @description  Кнопка «Раскрыть дерево» внутри заголовка «Создание заявки» в ЕИССД.
+// @version      1.7
+// @description  Кнопка «Раскрыть дерево» в заголовке «Создание заявки».
 // @author       Roman Yakovlev
 // @match        https://eissd.rt.ru/order/phys/*
 // @grant        none
@@ -17,7 +17,6 @@
         if (isProcessing) return;
         isProcessing = true;
 
-        // Находим зоны плюсиков у неразвернутых веток дерева
         const hitAreas = document.querySelectorAll(
             '.combo-tree .expandable > .hitarea, .treeview .expandable > .hitarea'
         );
@@ -29,31 +28,27 @@
         }
 
         hitAreas.forEach(hitArea => {
-            const clickEvent = new MouseEvent('click', {
+            hitArea.dispatchEvent(new MouseEvent('click', {
                 bubbles: true,
                 cancelable: true,
                 view: window
-            });
-
-            hitArea.dispatchEvent(clickEvent);
+            }));
         });
 
-        // Задержка на AJAX-подгрузку строк с сервера Ростелекома
         setTimeout(() => {
             isProcessing = false;
             expandComboTree();
         }, 400);
     }
 
-    // Создание кнопки внутри заголовка «Создание заявки»
     function createHeaderButton() {
-        // Ищем именно заголовок из указанной разметки
         const header = document.querySelector('h1.c-head-36.js-head');
-
         if (!header) return;
 
-        // Проверяем дубликаты
-        if (document.getElementById('eissd-expand-btn-header')) return;
+        const oldButton = document.getElementById('eissd-expand-btn-header');
+
+        if (oldButton && oldButton.closest('h1.c-head-36.js-head') === header) return;
+        if (oldButton) oldButton.remove();
 
         const btn = document.createElement('button');
         btn.id = 'eissd-expand-btn-header';
@@ -61,16 +56,18 @@
         btn.innerText = '🌳 Раскрыть дерево';
         btn.title = 'Раскрыть все доступные ветки дерева';
 
-        // Кнопка находится непосредственно внутри h1
         Object.assign(btn.style, {
             display: 'inline-flex',
             alignItems: 'center',
             verticalAlign: 'middle',
+            position: 'relative',
+            zIndex: '2147483647',
+            pointerEvents: 'auto',
             marginLeft: '18px',
             padding: '7px 14px',
-            backgroundColor: '#1a73e8',
-            color: '#ffffff',
-            border: 'none',
+            background: '#1a73e8',
+            color: '#fff',
+            border: '0',
             borderRadius: '4px',
             cursor: 'pointer',
             fontWeight: 'bold',
@@ -78,50 +75,35 @@
             lineHeight: '1.2',
             fontFamily: 'Arial, sans-serif',
             boxShadow: '0 2px 5px rgba(0,0,0,0.20)',
-            transition: 'background-color 0.15s ease, transform 0.1s ease'
+            transition: 'background-color .15s ease, transform .1s ease'
         });
 
-        btn.addEventListener('mouseenter', () => {
-            btn.style.backgroundColor = '#0b57d0';
-        });
-
+        btn.addEventListener('mouseenter', () => btn.style.background = '#0b57d0');
         btn.addEventListener('mouseleave', () => {
-            btn.style.backgroundColor = '#1a73e8';
+            btn.style.background = '#1a73e8';
             btn.style.transform = 'scale(1)';
         });
+        btn.addEventListener('mousedown', () => btn.style.transform = 'scale(.96)');
+        btn.addEventListener('mouseup', () => btn.style.transform = 'scale(1)');
 
-        btn.addEventListener('mousedown', () => {
-            btn.style.transform = 'scale(0.96)';
-        });
-
-        btn.addEventListener('mouseup', () => {
-            btn.style.transform = 'scale(1)';
-        });
-
+        // Срабатывает в capture-фазе, до обработчиков выпадающих списков ЕИССД.
         btn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-
+            e.stopImmediatePropagation();
             expandComboTree();
-        });
+        }, true);
 
-        // Добавляем кнопку в конец h1:
-        // <h1 ...>Создание заявки<span class="calcState"></span><button>...</button></h1>
+        btn.addEventListener('pointerdown', e => e.stopPropagation(), true);
+        btn.addEventListener('mousedown', e => e.stopPropagation(), true);
+
         header.appendChild(btn);
-
-        console.log('[ЕИССД]: Кнопка «Раскрыть дерево» добавлена в заголовок «Создание заявки».');
     }
 
-    // Инициализация
     function init() {
         createHeaderButton();
 
-        // Если заголовок создаётся/перерисовывается сайтом динамически,
-        // пробуем добавить кнопку снова после изменения DOM.
-        const observer = new MutationObserver(() => {
-            createHeaderButton();
-        });
-
+        const observer = new MutationObserver(() => createHeaderButton());
         observer.observe(document.body, {
             childList: true,
             subtree: true
